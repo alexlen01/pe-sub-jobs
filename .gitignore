@@ -1,0 +1,7 @@
+target/
+*.class
+*.jar
+*.war
+.env
+.mvn/wrapper/maven-wrapper.jar
+spring-boot-devtools.properties

@@ -50,7 +50,46 @@
       <artifactId>spring-boot-starter-test</artifactId>
       <scope>test</scope>
     </dependency>
+    <!-- Zonky embedded PostgreSQL: Docker-free, full Postgres (JSONB/casts) compatibility.
+         Mirrors pe-sub-api so @SpringBootTest boots against a real in-process Postgres
+         instead of requiring a running localhost:5432 instance. -->
+    <dependency>
+      <groupId>io.zonky.test</groupId>
+      <artifactId>embedded-database-spring-test</artifactId>
+      <version>2.6.0</version>
+      <scope>test</scope>
+      <!-- This starter transitively drags in org.testcontainers:{postgresql,mssqlserver,
+           mysql,mariadb} for its DOCKER provider. We only use the ZONKY provider (in-process
+           embedded-postgres binary, no Docker), so exclude the entire org.testcontainers
+           group to keep the dependency graph Docker-free. -->
+      <exclusions>
+        <exclusion>
+          <groupId>org.testcontainers</groupId>
+          <artifactId>*</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <!-- The ZONKY provider; declared optional by the starter above, so required explicitly. -->
+    <dependency>
+      <groupId>io.zonky.test</groupId>
+      <artifactId>embedded-postgres</artifactId>
+      <version>2.0.7</version>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
+
+  <dependencyManagement>
+    <dependencies>
+      <!-- Pin the embedded Postgres binary to v16 to match the production database. -->
+      <dependency>
+        <groupId>io.zonky.test.postgres</groupId>
+        <artifactId>embedded-postgres-binaries-bom</artifactId>
+        <version>16.2.0</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
 
   <build>
     <plugins>

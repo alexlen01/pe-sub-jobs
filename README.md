@@ -45,6 +45,16 @@ java -jar target/pe-sub-jobs-0.1.0.jar
 | `PORT` | `3003` | HTTP port |
 | `LOG_PATH` | `C:/Users/alexl/apps/pe-sub/logs` | Log output directory |
 
+## Testing
+
+**Database in tests — Zonky's embedded Postgres ONLY.** Any test that boots the Spring context
+(`@SpringBootTest`) or otherwise needs a database MUST extend `IntegrationTestBase`, which spins
+up Zonky's in-process embedded PostgreSQL (`@AutoConfigureEmbeddedDatabase(provider = ZONKY)`),
+mirroring pe-sub-api and pe-sub-extraction. This is Docker-free and requires no running
+`localhost:5432` instance. Never point a test at an external/live PostgreSQL, and never introduce
+H2, Testcontainers, or any other database engine — so test behaviour matches the production
+PostgreSQL 16 exactly.
+
 ## Project structure
 
 ```

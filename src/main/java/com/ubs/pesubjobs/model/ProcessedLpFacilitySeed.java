@@ -1,0 +1,27 @@
+package com.ubs.pesubjobs.model;
+
+public record ProcessedLpFacilitySeed(
+        int     facilityId,
+        Integer lpMasterId,
+        int     sourceSeq,
+        String  investorName,
+        String  parent,
+        boolean spv,
+        boolean highQty,
+        String  investorType,
+        String  instVsHnw,
+        String  regionLocation,
+        boolean investmentGrade,
+        String  classification,
+        String  agentCls,
+        String  sp,
+        String  mdy,
+        String  fitch,
+        String  aum,
+        String  nav,
+        String  pension,
+        String  pensionFunded,
+        String  capCommit,
+        String  uncalled,
+        String  agentRate,
+        String  agentConc) {}

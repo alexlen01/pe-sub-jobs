@@ -19,6 +19,9 @@ spring:
       enabled: true
 
 ingest:
+  # Launch the seed jobs on application startup. Disable (e.g. in tests, or when the shared
+  # schema is not yet migrated) to skip them without removing the on-demand /jobs endpoints.
+  run-on-startup: ${INGEST_RUN_ON_STARTUP:true}
   facility-file: ${FACILITY_INGEST_FILE:data/mock/facilities.csv}
   lp-master-file: ${LP_MASTER_INGEST_FILE:data/mock/lp_master.csv}
   lp-facility-seeds-file: ${LP_FACILITY_SEEDS_FILE:data/mock/lp_facility_seeds.csv}

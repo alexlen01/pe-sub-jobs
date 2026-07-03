@@ -53,6 +53,12 @@ All three jobs run automatically once the application is up, in sequence:
 
 The seed job runs **after** facilities and LP Master because it depends on both tables being populated. Each job logs `status / readCount / writeCount / skipCount` on completion. A failure on one job is caught and logged; the remaining jobs still run. The skip limit per job is 10 rows — exceeding it marks that job `FAILED`.
 
+Startup ingest is controlled by `ingest.run-on-startup` (default `true`; env `INGEST_RUN_ON_STARTUP`).
+Set it to `false` to skip the seed jobs on boot — for example when the shared schema has not been
+migrated yet, or in tests (the integration base sets it `false` so jobs don't run against the empty
+embedded database, whose business tables are owned by `pe-sub-api`'s migrations). Disabling startup
+ingest does **not** remove the on-demand REST triggers below.
+
 Jobs can also be triggered on demand via REST (see [REST API](#rest-api)).
 
 ## Mock data
@@ -112,6 +118,7 @@ POST /jobs/lp-records-seed?filePath=<absolute-or-relative-path>
 | `FACILITY_INGEST_FILE` | `data/mock/facilities.csv` | Path to facilities CSV for startup ingest |
 | `LP_MASTER_INGEST_FILE` | `data/mock/lp_master.csv` | Path to LP master CSV for startup ingest |
 | `LP_FACILITY_SEEDS_FILE` | `data/mock/lp_facility_seeds.csv` | Path to LP-facility seed CSV for startup ingest |
+| `INGEST_RUN_ON_STARTUP` | `true` | Run the seed jobs on startup; set `false` to skip them |
 
 ## Logging
 

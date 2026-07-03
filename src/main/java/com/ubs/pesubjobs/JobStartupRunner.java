@@ -39,6 +39,10 @@ public class JobStartupRunner implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
+        if (!ingestProperties.runOnStartup()) {
+            log.info("Startup ingest disabled (ingest.run-on-startup=false) — skipping seed jobs");
+            return;
+        }
         runJob("facility-ingest",   facilityIngestJob,  ingestProperties.facilityFile());
         runJob("lp-master-ingest",  lpMasterIngestJob,  ingestProperties.lpMasterFile());
         runJob("lp-records-seed",   lpRecordsSeedJob,   ingestProperties.lpFacilitySeedsFile());

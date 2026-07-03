@@ -84,6 +84,34 @@
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-maven-plugin</artifactId>
       </plugin>
+
+      <!-- Resolve the mockito-core jar path into the ${org.mockito:mockito-core:jar} property so
+           Surefire can load it as a -javaagent below. Versions are managed by
+           spring-boot-starter-parent; the `properties` goal binds to the initialize phase, before
+           tests run. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <executions>
+          <execution>
+            <goals>
+              <goal>properties</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- Load Mockito as an explicit Java agent instead of letting it self-attach at runtime;
+           self-attachment is deprecated and will stop working on future JDKs. -Xshare:off silences
+           the CDS "sharing is only supported for boot loader classes" warning that the appended
+           agent otherwise triggers. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <argLine>-javaagent:${org.mockito:mockito-core:jar} -Xshare:off</argLine>
+        </configuration>
+      </plugin>
     </plugins>
   </build>
 

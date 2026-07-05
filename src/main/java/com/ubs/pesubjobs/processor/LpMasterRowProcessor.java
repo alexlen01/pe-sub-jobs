@@ -2,7 +2,7 @@ package com.ubs.pesubjobs.processor;
 
 import com.ubs.pesubjobs.model.LpMasterRow;
 import com.ubs.pesubjobs.model.ProcessedLpMaster;
-import org.springframework.batch.item.ItemProcessor;
+import org.springframework.batch.infrastructure.item.ItemProcessor;
 import org.springframework.lang.NonNull;
 import org.springframework.lang.Nullable;
 

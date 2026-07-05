@@ -1,11 +1,11 @@
 # pe-sub-jobs
 
-Spring Boot 3.5 / Java 21 / Spring Batch 5 data ingestion service for the PE Sub Borrowing Base Platform. Reads flat-file CSV exports and upserts records into the shared PostgreSQL database. Runs at **`http://localhost:3003`**.
+Spring Boot 4.1 / Java 25 / Spring Batch 6 data ingestion service for the PE Sub Borrowing Base Platform. Reads flat-file CSV exports and upserts records into the shared PostgreSQL database. Runs at **`http://localhost:3003`**.
 
 ## Stack
 
-- Java 21, Spring Boot 3.5.15, Maven 3.9
-- Spring Batch 5 — chunk-oriented processing, fault-tolerant skip policy
+- Java 25, Spring Boot 4.1.0, Maven 3.9
+- Spring Batch 6 — chunk-oriented processing, fault-tolerant skip policy
 - Spring JDBC (`JdbcBatchItemWriter`) — direct UPSERT SQL; no JPA
 - PostgreSQL 16 (shared with `pe-sub-api`) — Spring Batch meta-tables auto-created on first startup
 - Logback — daily rolling log to `pe-sub-jobs.log`, gzip-archived, 30-day retention
@@ -78,7 +78,7 @@ Development seed files are in `data/mock/`:
 ```bash
 # PostgreSQL must be running (shared with pe-sub-api)
 
-mvnw spring-boot:run
+mvn spring-boot:run
 ```
 
 On startup the app creates the Spring Batch meta-tables in the shared database (if they don't exist) and immediately runs both ingest jobs against the mock data files.
@@ -114,7 +114,7 @@ POST /jobs/lp-records-seed?filePath=<absolute-or-relative-path>
 | `SPRING_DATASOURCE_USERNAME` | `pesub` | DB username |
 | `SPRING_DATASOURCE_PASSWORD` | `password` | DB password |
 | `PORT` | `3003` | HTTP port |
-| `LOG_PATH` | `C:/Users/alexl/apps/pe-sub/logs` | Log output directory |
+| `LOG_PATH` | `logs` | Log output directory |
 | `FACILITY_INGEST_FILE` | `data/mock/facilities.csv` | Path to facilities CSV for startup ingest |
 | `LP_MASTER_INGEST_FILE` | `data/mock/lp_master.csv` | Path to LP master CSV for startup ingest |
 | `LP_FACILITY_SEEDS_FILE` | `data/mock/lp_facility_seeds.csv` | Path to LP-facility seed CSV for startup ingest |
@@ -127,9 +127,9 @@ Logs are written to `$LOG_PATH/pe-sub-jobs.log` and rotated daily to `$LOG_PATH/
 ## Build
 
 ```bash
-mvnw package              # fat JAR → target/pe-sub-jobs-0.1.0.jar
-mvnw package -DskipTests
-java -jar target/pe-sub-jobs-0.1.0.jar
+mvn package              # fat JAR → target/pe-sub-jobs-1.0.0.jar
+mvn package -DskipTests
+java -jar target/pe-sub-jobs-1.0.0.jar
 ```
 
 ## Testing

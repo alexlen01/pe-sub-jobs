@@ -28,4 +28,4 @@ ingest:
 
 logging:
   file:
-    path: ${LOG_PATH:C:/Users/alexl/apps/pe-sub/logs}
+    path: ${LOG_PATH:logs}

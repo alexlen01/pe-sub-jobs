@@ -5,3 +5,6 @@ target/
 .env
 .mvn/wrapper/maven-wrapper.jar
 spring-boot-devtools.properties
+
+# Runtime output
+logs/

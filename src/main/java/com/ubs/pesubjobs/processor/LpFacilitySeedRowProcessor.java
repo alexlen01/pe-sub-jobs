@@ -4,7 +4,7 @@ import com.ubs.pesubjobs.model.LpFacilitySeedRow;
 import com.ubs.pesubjobs.model.ProcessedLpFacilitySeed;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.batch.item.ItemProcessor;
+import org.springframework.batch.infrastructure.item.ItemProcessor;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Component;
 

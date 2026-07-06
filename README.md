@@ -71,7 +71,7 @@ Development seed files are in `data/mock/`:
 | `data/mock/lp_master.csv` | 30 LP Master records across all classification tiers |
 | `data/mock/lp_facility_seeds.csv` | 42 LP-to-facility assignments across 5 active facilities |
 
-`lp_facility_seeds.csv` links LP Master records to specific facilities, producing `lp_records` rows the same way the ingestion wizard would. Uses `ON CONFLICT DO NOTHING` — safe to re-run. These are the default files used on startup (see `ingest.*` properties below).
+`lp_facility_seeds.csv` links LP Master records to specific facilities, producing `lp_records` rows the same way the ingestion wizard would. It upserts on `(facility_id, investor_name)`, so re-running refreshes seeded values instead of failing on duplicates. These are the default files used on startup (see `ingest.*` properties below).
 
 ## Getting started
 
@@ -119,6 +119,23 @@ POST /jobs/lp-records-seed?filePath=<absolute-or-relative-path>
 | `LP_MASTER_INGEST_FILE` | `data/mock/lp_master.csv` | Path to LP master CSV for startup ingest |
 | `LP_FACILITY_SEEDS_FILE` | `data/mock/lp_facility_seeds.csv` | Path to LP-facility seed CSV for startup ingest |
 | `INGEST_RUN_ON_STARTUP` | `true` | Run the seed jobs on startup; set `false` to skip them |
+| `INGEST_SCHEMA_WAIT_TIMEOUT` | `30s` | How long startup ingest waits for API-owned business tables |
+| `INGEST_SCHEMA_WAIT_INTERVAL` | `2s` | Poll interval while waiting for business tables |
+| `BB_TEMPLATE_IMPORT_ENABLED` | `true` | Import BB template workbooks from the watched directory |
+| `BB_TEMPLATE_IMPORT_DIR` | `data/bb-templates` | Directory scanned for `BB-Template-Import-*.xlsx` workbooks |
+| `PE_SUB_API_URL` | `http://localhost:3001` | `pe-sub-api` base URL used for idempotent template upserts |
+| `BB_TEMPLATE_SCAN_INTERVAL` | `30s` | How often to rescan the template directory while running |
+| `BB_TEMPLATE_STABLE_AGE` | `2s` | Minimum file age before import, to avoid partially copied files |
+
+## BB Template Imports
+
+`pe-sub-jobs` imports structured BB template workbooks from `data/bb-templates/` on startup and
+rescans the directory while running. Files are sent to `pe-sub-api` through
+`POST /api/bb-templates/import?mode=upsert`, so imports are idempotent by `template_slug`:
+existing templates are replaced, and missing templates are created.
+
+Use `.partial` or `.tmp` while copying large files, then rename to `.xlsx` when complete. Temporary
+Excel files beginning with `~$` are ignored.
 
 ## Logging
 

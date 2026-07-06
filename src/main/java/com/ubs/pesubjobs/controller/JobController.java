@@ -4,7 +4,7 @@ import org.springframework.batch.core.job.Job;
 import org.springframework.batch.core.job.JobExecution;
 import org.springframework.batch.core.job.parameters.JobParameters;
 import org.springframework.batch.core.job.parameters.JobParametersBuilder;
-import org.springframework.batch.core.launch.JobLauncher;
+import org.springframework.batch.core.launch.JobOperator;
 import org.springframework.batch.core.step.StepExecution;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpStatus;
@@ -20,16 +20,16 @@ import org.springframework.web.server.ResponseStatusException;
 @RequestMapping("/jobs")
 public class JobController {
 
-    private final JobLauncher jobLauncher;
+    private final JobOperator jobOperator;
     private final Job facilityIngestJob;
     private final Job lpMasterIngestJob;
     private final Job lpRecordsSeedJob;
 
-    public JobController(JobLauncher jobLauncher,
+    public JobController(JobOperator jobOperator,
                          @Qualifier("facilityIngestJob")  Job facilityIngestJob,
                          @Qualifier("lpMasterIngestJob")  Job lpMasterIngestJob,
                          @Qualifier("lpRecordsSeedJob")   Job lpRecordsSeedJob) {
-        this.jobLauncher       = jobLauncher;
+        this.jobOperator       = jobOperator;
         this.facilityIngestJob = facilityIngestJob;
         this.lpMasterIngestJob = lpMasterIngestJob;
         this.lpRecordsSeedJob  = lpRecordsSeedJob;
@@ -52,7 +52,7 @@ public class JobController {
                 .addLong("runId", System.currentTimeMillis())
                 .toJobParameters();
 
-        JobExecution execution = jobLauncher.run(job, params);
+        JobExecution execution = jobOperator.start(job, params);
 
         long reads = 0, writes = 0, skips = 0;
         for (StepExecution se : execution.getStepExecutions()) {

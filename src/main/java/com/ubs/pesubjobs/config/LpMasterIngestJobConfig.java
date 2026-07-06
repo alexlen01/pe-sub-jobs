@@ -41,7 +41,8 @@ public class LpMasterIngestJobConfig {
                                    LpMasterRowProcessor lpMasterProcessor,
                                    @Qualifier("lpMasterWriter") JdbcBatchItemWriter<ProcessedLpMaster> lpMasterWriter) {
         return new StepBuilder("lpMasterIngestStep", jobRepository)
-                .<LpMasterRow, ProcessedLpMaster>chunk(50, txManager)
+                .<LpMasterRow, ProcessedLpMaster>chunk(50)
+                .transactionManager(txManager)
                 .reader(lpMasterReader)
                 .processor(lpMasterProcessor)
                 .writer(lpMasterWriter)

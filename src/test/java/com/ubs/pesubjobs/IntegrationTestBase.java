@@ -9,7 +9,7 @@ import org.springframework.test.context.TestPropertySource;
 // required — so JPA auto-configuration and Flyway connect to a genuine Postgres instead of
 // requiring a running localhost:5432 database. Mirrors pe-sub-api's IntegrationTestBase.
 //
-// provider = ZONKY  -> spin up the bundled embedded-postgres binary for this platform.
+// provider = EMBEDDED -> spin up the bundled embedded-postgres binary for this platform.
 // refresh  = NEVER (default) -> the database is bound to the shared Spring test context and
 //            lives for the whole run. Test classes remain responsible for their own teardown.
 //
@@ -23,7 +23,10 @@ import org.springframework.test.context.TestPropertySource;
 // job behaviour should be covered by dedicated tests that first provision a schema.
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureMockMvc
-@AutoConfigureEmbeddedDatabase(provider = AutoConfigureEmbeddedDatabase.DatabaseProvider.ZONKY)
-@TestPropertySource(properties = "ingest.run-on-startup=false")
+@AutoConfigureEmbeddedDatabase(provider = AutoConfigureEmbeddedDatabase.DatabaseProvider.EMBEDDED)
+@TestPropertySource(properties = {
+    "ingest.run-on-startup=false",
+    "bb-template-import.enabled=false"
+})
 public abstract class IntegrationTestBase {
 }

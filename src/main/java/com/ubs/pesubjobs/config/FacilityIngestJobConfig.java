@@ -41,7 +41,8 @@ public class FacilityIngestJobConfig {
                                    FacilityRowProcessor facilityProcessor,
                                    @Qualifier("facilityWriter") JdbcBatchItemWriter<ProcessedFacility> facilityWriter) {
         return new StepBuilder("facilityIngestStep", jobRepository)
-                .<FacilityRow, ProcessedFacility>chunk(50, txManager)
+                .<FacilityRow, ProcessedFacility>chunk(50)
+                .transactionManager(txManager)
                 .reader(facilityReader)
                 .processor(facilityProcessor)
                 .writer(facilityWriter)

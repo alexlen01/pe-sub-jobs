@@ -3,14 +3,11 @@ package com.ubs.pesubjobs.processor;
 import com.ubs.pesubjobs.model.LpMasterRow;
 import com.ubs.pesubjobs.model.ProcessedLpMaster;
 import org.springframework.batch.infrastructure.item.ItemProcessor;
-import org.springframework.lang.NonNull;
-import org.springframework.lang.Nullable;
 
 public class LpMasterRowProcessor implements ItemProcessor<LpMasterRow, ProcessedLpMaster> {
 
     @Override
-    @Nullable
-    public ProcessedLpMaster process(@NonNull LpMasterRow item) {
+    public ProcessedLpMaster process(LpMasterRow item) {
         if (item.investorName() == null || item.investorName().isBlank()) return null;
         return new ProcessedLpMaster(
                 item.investorName().trim(),

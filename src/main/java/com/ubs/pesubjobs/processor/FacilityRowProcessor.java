@@ -3,8 +3,6 @@ package com.ubs.pesubjobs.processor;
 import com.ubs.pesubjobs.model.FacilityRow;
 import com.ubs.pesubjobs.model.ProcessedFacility;
 import org.springframework.batch.infrastructure.item.ItemProcessor;
-import org.springframework.lang.NonNull;
-import org.springframework.lang.Nullable;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -15,8 +13,7 @@ public class FacilityRowProcessor implements ItemProcessor<FacilityRow, Processe
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ISO_LOCAL_DATE;
 
     @Override
-    @Nullable
-    public ProcessedFacility process(@NonNull FacilityRow item) {
+    public ProcessedFacility process(FacilityRow item) {
         if (item.name() == null || item.name().isBlank()) return null;
         if (item.agentBank() == null || item.agentBank().isBlank()) return null;
         return new ProcessedFacility(

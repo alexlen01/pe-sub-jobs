@@ -25,6 +25,15 @@ ingest:
   facility-file: ${FACILITY_INGEST_FILE:data/mock/facilities.csv}
   lp-master-file: ${LP_MASTER_INGEST_FILE:data/mock/lp_master.csv}
   lp-facility-seeds-file: ${LP_FACILITY_SEEDS_FILE:data/mock/lp_facility_seeds.csv}
+  schema-wait-timeout: ${INGEST_SCHEMA_WAIT_TIMEOUT:30s}
+  schema-wait-interval: ${INGEST_SCHEMA_WAIT_INTERVAL:2s}
+
+bb-template-import:
+  enabled: ${BB_TEMPLATE_IMPORT_ENABLED:true}
+  directory: ${BB_TEMPLATE_IMPORT_DIR:data/bb-templates}
+  api-base-url: ${PE_SUB_API_URL:http://localhost:3001}
+  scan-interval: ${BB_TEMPLATE_SCAN_INTERVAL:30s}
+  stable-age: ${BB_TEMPLATE_STABLE_AGE:2s}
 
 logging:
   file:

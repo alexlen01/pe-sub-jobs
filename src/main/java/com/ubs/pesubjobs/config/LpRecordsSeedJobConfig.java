@@ -40,7 +40,8 @@ public class LpRecordsSeedJobConfig {
                                    LpFacilitySeedRowProcessor processor,
                                    @Qualifier("lpRecordsSeedWriter") JdbcBatchItemWriter<ProcessedLpFacilitySeed> writer) {
         return new StepBuilder("lpRecordsSeedStep", jobRepository)
-                .<LpFacilitySeedRow, ProcessedLpFacilitySeed>chunk(50, txManager)
+                .<LpFacilitySeedRow, ProcessedLpFacilitySeed>chunk(50)
+                .transactionManager(txManager)
                 .reader(reader)
                 .processor(processor)
                 .writer(writer)
@@ -76,19 +77,46 @@ public class LpRecordsSeedJobConfig {
                 INSERT INTO lp_records (
                     facility_id, lp_master_id, source_seq, investor_name, parent,
                     spv, high_qty, investor_type, inst_vs_hnw, region_location,
-                    investment_grade, classification, agent_cls,
+                    investment_grade, classification, agent_cls, agent_cls_source,
                     sp, mdy, fitch, aum, nav, pension, pension_funded,
                     cap_commit, uncalled_capital, agent_rate, agent_conc,
                     included, rcl, transferee, created_at, updated_at
                 ) VALUES (
                     :facilityId, :lpMasterId, :sourceSeq, :investorName, :parent,
                     :spv, :highQty, :investorType, :instVsHnw, :regionLocation,
-                    :investmentGrade, :classification, :agentCls,
+                    :investmentGrade, :classification, :agentCls, 'EXTRACTED',
                     :sp, :mdy, :fitch, :aum, :nav, :pension, :pensionFunded,
                     :capCommit, :uncalled, :agentRate, :agentConc,
                     true, false, false, NOW(), NOW()
                 )
-                ON CONFLICT (facility_id, investor_name) DO NOTHING
+                ON CONFLICT (facility_id, investor_name) DO UPDATE SET
+                    lp_master_id = EXCLUDED.lp_master_id,
+                    source_seq = EXCLUDED.source_seq,
+                    parent = EXCLUDED.parent,
+                    spv = EXCLUDED.spv,
+                    high_qty = EXCLUDED.high_qty,
+                    investor_type = EXCLUDED.investor_type,
+                    inst_vs_hnw = EXCLUDED.inst_vs_hnw,
+                    region_location = EXCLUDED.region_location,
+                    investment_grade = EXCLUDED.investment_grade,
+                    classification = EXCLUDED.classification,
+                    agent_cls = EXCLUDED.agent_cls,
+                    agent_cls_source = EXCLUDED.agent_cls_source,
+                    sp = EXCLUDED.sp,
+                    mdy = EXCLUDED.mdy,
+                    fitch = EXCLUDED.fitch,
+                    aum = EXCLUDED.aum,
+                    nav = EXCLUDED.nav,
+                    pension = EXCLUDED.pension,
+                    pension_funded = EXCLUDED.pension_funded,
+                    cap_commit = EXCLUDED.cap_commit,
+                    uncalled_capital = EXCLUDED.uncalled_capital,
+                    agent_rate = EXCLUDED.agent_rate,
+                    agent_conc = EXCLUDED.agent_conc,
+                    included = EXCLUDED.included,
+                    rcl = EXCLUDED.rcl,
+                    transferee = EXCLUDED.transferee,
+                    updated_at = NOW()
                 """;
         return new JdbcBatchItemWriterBuilder<ProcessedLpFacilitySeed>()
                 .dataSource(dataSource)

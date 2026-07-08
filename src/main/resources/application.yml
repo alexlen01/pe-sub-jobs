@@ -25,6 +25,11 @@ ingest:
   facility-file: ${FACILITY_INGEST_FILE:data/mock/facilities.csv}
   lp-master-file: ${LP_MASTER_INGEST_FILE:data/mock/lp_master.csv}
   lp-facility-seeds-file: ${LP_FACILITY_SEEDS_FILE:data/mock/lp_facility_seeds.csv}
+  # Optional: classification concentration-limit defaults feed (classification,limit_pct).
+  # Blank → skipped at startup; trigger on demand via POST /jobs/cls-conc-limits-ingest.
+  cls-conc-limits-file: ${CLS_CONC_LIMITS_FILE:}
+  # Used to reload pe-sub-api's in-memory config cache after a config feed run.
+  api-base-url: ${PE_SUB_API_URL:http://localhost:3001}
   schema-wait-timeout: ${INGEST_SCHEMA_WAIT_TIMEOUT:30s}
   schema-wait-interval: ${INGEST_SCHEMA_WAIT_INTERVAL:2s}
 

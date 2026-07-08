@@ -60,10 +60,9 @@ public class FacilityIngestJobConfig {
                 .name("facilityReader")
                 .resource(new FileSystemResource(filePath))
                 .linesToSkip(1)
-                .delimited()
-                .quoteCharacter('"')
-                .names("agentBank", "name", "accountNumber", "loanAmount",
-                       "maturityDate", "bankStatus", "bankStatusDate")
+                .lineTokenizer(CsvLineTokenizers.lenientQuotedCsvTokenizer(
+                        "agentBank", "name", "accountNumber", "loanAmount",
+                        "maturityDate", "bankStatus", "bankStatusDate"))
                 .fieldSetMapper(fs -> new FacilityRow(
                         fs.readString("agentBank"),
                         fs.readString("name"),

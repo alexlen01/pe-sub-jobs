@@ -57,9 +57,9 @@ public class LpRecordsSeedJobConfig {
                 .name("lpFacilitySeedReader")
                 .resource(new FileSystemResource(filePath))
                 .linesToSkip(1)
-                .delimited().quoteCharacter('"')
-                .names("facilityName", "investorName", "capCommit", "uncalled",
-                       "agentCls", "agentRate", "agentConc")
+                .lineTokenizer(CsvLineTokenizers.lenientQuotedCsvTokenizer(
+                        "facilityName", "investorName", "capCommit", "uncalled",
+                        "agentCls", "agentRate", "agentConc"))
                 .fieldSetMapper(fs -> new LpFacilitySeedRow(
                         fs.readString("facilityName"),
                         fs.readString("investorName"),

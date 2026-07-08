@@ -53,14 +53,8 @@ public class LpFacilitySeedRowProcessor implements ItemProcessor<LpFacilitySeedR
         }
         Map<String, Object> lp = lpRows.getFirst();
 
-        String classification = str(lp.get("ubs_classification"));
-        if (classification == null || classification.isBlank()) {
-            classification = switch (row.agentCls() == null ? "" : row.agentCls()) {
-                case "Rated"     -> "Rated Included";
-                case "Designated" -> "Designated PWM";
-                default           -> "Non-Rated Included";
-            };
-        }
+        String agentCls = normalizeAgentClassification(row.agentCls());
+        String classification = normalizeUbsClassification(str(lp.get("ubs_classification")), agentCls);
 
         return new ProcessedLpFacilitySeed(
                 facilityId,
@@ -75,7 +69,7 @@ public class LpFacilitySeedRowProcessor implements ItemProcessor<LpFacilitySeedR
                 coalesce(str(lp.get("region_location")), ""),
                 bool(lp.get("investment_grade")),
                 classification,
-                row.agentCls(),
+                agentCls,
                 coalesce(str(lp.get("sp")),    ""),
                 coalesce(str(lp.get("mdy")),   ""),
                 coalesce(str(lp.get("fitch")), ""),
@@ -92,4 +86,41 @@ public class LpFacilitySeedRowProcessor implements ItemProcessor<LpFacilitySeedR
     private static String str(Object o)                       { return o == null ? null : o.toString(); }
     private static boolean bool(Object o)                     { return o instanceof Boolean b && b; }
     private static String coalesce(String v, String fallback) { return (v != null && !v.isBlank()) ? v : fallback; }
+
+    private static String normalizeAgentClassification(String raw) {
+        if (raw == null || raw.isBlank()) return "Non-Rated Included";
+        return switch (raw.trim()) {
+            case "Rated", "Rated Included" -> "Rated Included";
+            case "Non-Rated", "Non-Rated Included" -> "Non-Rated Included";
+            case "Designated", "Designated Institutional" -> "Designated Institutional";
+            case "Designated PWM" -> "Designated PWM";
+            case "Ineligible", "Ineligible Investor", "Ineligible Investors" -> "Ineligible Investor";
+            default -> raw.trim();
+        };
+    }
+
+    private static String normalizeUbsClassification(String raw, String agentCls) {
+        String value = raw == null ? "" : raw.trim();
+        return switch (value) {
+            case "Rated Investor" -> "Rated Investor";
+            case "Unrated NAV > $1Bn" -> "Unrated NAV > $1Bn";
+            case "FoF & Other > $10Bn AUM" -> "FoF & Other > $10Bn AUM";
+            case "Corp Pension > $5Bn Assets" -> "Corp Pension > $5Bn Assets";
+            case "Other Institutional" -> "Other Institutional";
+            case "Excluded" -> "Excluded";
+            case "Rated", "Rated Included" -> "Rated Investor";
+            case "Unrated >2bn", "Unrated AUM >$2bn", "Unrated AUM $1-2bn", "Eligible <$1bn",
+                 "Non-Rated", "Non-Rated Included" -> "Unrated NAV > $1Bn";
+            case "Designated Institutional" -> "Corp Pension > $5Bn Assets";
+            case "Eligible", "Designated PWM", "Included (PWM)" -> "Other Institutional";
+            case "Ineligible Investor", "Ineligible Investors" -> "Excluded";
+            default -> switch (agentCls) {
+                case "Rated Included" -> "Rated Investor";
+                case "Designated Institutional" -> "Corp Pension > $5Bn Assets";
+                case "Designated PWM" -> "Other Institutional";
+                case "Ineligible Investor" -> "Excluded";
+                default -> "Unrated NAV > $1Bn";
+            };
+        };
+    }
 }

@@ -27,6 +27,7 @@ public class JobStartupRunner implements ApplicationRunner {
     private final Job facilityIngestJob;
     private final Job lpMasterIngestJob;
     private final Job lpRecordsSeedJob;
+    private final Job clsConcLimitIngestJob;
     private final IngestProperties ingestProperties;
     private final JdbcTemplate jdbc;
 
@@ -34,12 +35,14 @@ public class JobStartupRunner implements ApplicationRunner {
                             @Qualifier("facilityIngestJob") Job facilityIngestJob,
                             @Qualifier("lpMasterIngestJob") Job lpMasterIngestJob,
                             @Qualifier("lpRecordsSeedJob") Job lpRecordsSeedJob,
+                            @Qualifier("clsConcLimitIngestJob") Job clsConcLimitIngestJob,
                             IngestProperties ingestProperties,
                             JdbcTemplate jdbc) {
         this.jobOperator = jobOperator;
         this.facilityIngestJob = facilityIngestJob;
         this.lpMasterIngestJob = lpMasterIngestJob;
         this.lpRecordsSeedJob = lpRecordsSeedJob;
+        this.clsConcLimitIngestJob = clsConcLimitIngestJob;
         this.ingestProperties = ingestProperties;
         this.jdbc = jdbc;
     }
@@ -58,6 +61,14 @@ public class JobStartupRunner implements ApplicationRunner {
         runJob("facility-ingest", facilityIngestJob, ingestProperties.facilityFile());
         runJob("lp-master-ingest", lpMasterIngestJob, ingestProperties.lpMasterFile());
         runJob("lp-records-seed", lpRecordsSeedJob, ingestProperties.lpFacilitySeedsFile());
+        // Optional feed: the API's V1_5 migration seeds class defaults, so this only runs
+        // when a feed file is explicitly configured (CLS_CONC_LIMITS_FILE).
+        String clsConcFile = ingestProperties.clsConcLimitsFile();
+        if (clsConcFile != null && !clsConcFile.isBlank()) {
+            runJob("cls-conc-limits-ingest", clsConcLimitIngestJob, clsConcFile);
+        } else {
+            log.info("[cls-conc-limits-ingest] skipped - no feed file configured (ingest.cls-conc-limits-file)");
+        }
     }
 
     private boolean waitForBusinessSchema() {

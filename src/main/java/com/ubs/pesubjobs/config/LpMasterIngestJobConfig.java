@@ -60,12 +60,11 @@ public class LpMasterIngestJobConfig {
                 .name("lpMasterReader")
                 .resource(new FileSystemResource(filePath))
                 .linesToSkip(1)
-                .delimited()
-                .quoteCharacter('"')
-                .names("investorName", "parent", "spv", "highQty", "investorType",
-                       "instVsHnw", "regionLocation", "investmentGrade", "sp", "mdy",
-                       "fitch", "aum", "nav", "pension", "pensionFunded",
-                       "ubsClassification", "ubsDefaultAdvRate", "ubsDefaultConcLimit", "notes")
+                .lineTokenizer(CsvLineTokenizers.lenientQuotedCsvTokenizer(
+                        "investorName", "parent", "spv", "highQty", "investorType",
+                        "instVsHnw", "regionLocation", "investmentGrade", "sp", "mdy",
+                        "fitch", "aum", "nav", "pension", "pensionFunded",
+                        "ubsClassification", "ubsDefaultAdvRate", "ubsDefaultConcLimit", "notes"))
                 .fieldSetMapper(fs -> new LpMasterRow(
                         fs.readString("investorName"),
                         fs.readString("parent"),

@@ -7,10 +7,20 @@ import org.springframework.batch.infrastructure.item.ItemProcessor;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeFormatterBuilder;
+import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoField;
+import java.util.List;
 
 public class FacilityRowProcessor implements ItemProcessor<FacilityRow, ProcessedFacility> {
 
-    private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ISO_LOCAL_DATE;
+    private static final List<DateTimeFormatter> DATE_FORMATS = List.of(
+            DateTimeFormatter.ISO_LOCAL_DATE,
+            new DateTimeFormatterBuilder()
+                    .appendPattern("M/d/")
+                    .appendValue(ChronoField.YEAR, 4)
+                    .toFormatter()
+    );
 
     @Override
     public ProcessedFacility process(FacilityRow item) {
@@ -38,6 +48,14 @@ public class FacilityRowProcessor implements ItemProcessor<FacilityRow, Processe
 
     private LocalDate parseDate(String s) {
         if (s == null || s.isBlank()) return null;
-        return LocalDate.parse(s.trim(), DATE_FMT);
+        String value = s.trim();
+        for (DateTimeFormatter formatter : DATE_FORMATS) {
+            try {
+                return LocalDate.parse(value, formatter);
+            } catch (DateTimeParseException ignored) {
+                // Try the next feed-supported date shape.
+            }
+        }
+        throw new DateTimeParseException("Unsupported date format", value, 0);
     }
 }

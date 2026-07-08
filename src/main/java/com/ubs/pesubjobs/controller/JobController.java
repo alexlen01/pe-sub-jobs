@@ -24,15 +24,18 @@ public class JobController {
     private final Job facilityIngestJob;
     private final Job lpMasterIngestJob;
     private final Job lpRecordsSeedJob;
+    private final Job clsConcLimitIngestJob;
 
     public JobController(JobOperator jobOperator,
-                         @Qualifier("facilityIngestJob")  Job facilityIngestJob,
-                         @Qualifier("lpMasterIngestJob")  Job lpMasterIngestJob,
-                         @Qualifier("lpRecordsSeedJob")   Job lpRecordsSeedJob) {
-        this.jobOperator       = jobOperator;
-        this.facilityIngestJob = facilityIngestJob;
-        this.lpMasterIngestJob = lpMasterIngestJob;
-        this.lpRecordsSeedJob  = lpRecordsSeedJob;
+                         @Qualifier("facilityIngestJob")      Job facilityIngestJob,
+                         @Qualifier("lpMasterIngestJob")      Job lpMasterIngestJob,
+                         @Qualifier("lpRecordsSeedJob")       Job lpRecordsSeedJob,
+                         @Qualifier("clsConcLimitIngestJob")  Job clsConcLimitIngestJob) {
+        this.jobOperator           = jobOperator;
+        this.facilityIngestJob     = facilityIngestJob;
+        this.lpMasterIngestJob     = lpMasterIngestJob;
+        this.lpRecordsSeedJob      = lpRecordsSeedJob;
+        this.clsConcLimitIngestJob = clsConcLimitIngestJob;
     }
 
     @PostMapping("/{jobName}")
@@ -41,9 +44,10 @@ public class JobController {
             @RequestParam String filePath) throws Exception {
 
         Job job = switch (jobName) {
-            case "facility-ingest"  -> facilityIngestJob;
-            case "lp-master-ingest" -> lpMasterIngestJob;
-            case "lp-records-seed"  -> lpRecordsSeedJob;
+            case "facility-ingest"        -> facilityIngestJob;
+            case "lp-master-ingest"       -> lpMasterIngestJob;
+            case "lp-records-seed"        -> lpRecordsSeedJob;
+            case "cls-conc-limits-ingest" -> clsConcLimitIngestJob;
             default -> throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Unknown job: " + jobName);
         };
 

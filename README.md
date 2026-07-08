@@ -43,6 +43,30 @@ ubs_classification, ubs_default_adv_rate, ubs_default_conc_limit, notes
 - `sp`, `mdy`, `fitch` — rating strings; blank stored as `""`
 - `investor_name` is the upsert key (`ON CONFLICT (investor_name) DO UPDATE`)
 
+### `cls-conc-limits-ingest`
+
+Reads a CSV of per-classification concentration-limit defaults and merges it into the
+`cls_conc_limit_defaults` config row (jsonb map) in the shared `config` table — the same
+map edited on the UI's Config screen (Per-LP Concentration Limit Defaults card) and used
+by the BB engine's fallback chain (per-LP limit → class default → facility limit).
+
+**CSV columns (header row required):**
+
+```
+classification, limit_pct
+```
+
+- `limit_pct` — a **single** percent of total uncalled capital (`7.5` or `7.5%`); rows
+  outside 0–100 or unparseable are skipped. The source workbook
+  (`pe-sub-docs/Concentration_Limits.xls`) states each class as a range — feed the chosen
+  bound as one number here, not the raw `"15.0 – 20.0"` range string (which would fail the
+  numeric parse and skip the row)
+- Rows **merge by classification key**: fed classes are overwritten, unfed classes are
+  left untouched. En/em dashes in labels are normalized to hyphens
+- After a successful run the job calls `POST {PE_SUB_API_URL}/api/config/reload` so
+  `pe-sub-api`'s in-memory config cache picks the values up immediately; if the API is
+  down this logs a warning and the values apply on its next restart
+
 ## Startup behaviour
 
 All three jobs run automatically once the application is up, in sequence:
@@ -52,6 +76,10 @@ All three jobs run automatically once the application is up, in sequence:
 3. `lp-records-seed` against `ingest.lp-facility-seeds-file`
 
 The seed job runs **after** facilities and LP Master because it depends on both tables being populated. Each job logs `status / readCount / writeCount / skipCount` on completion. A failure on one job is caught and logged; the remaining jobs still run. The skip limit per job is 10 rows — exceeding it marks that job `FAILED`.
+
+`cls-conc-limits-ingest` runs at startup **only when** `ingest.cls-conc-limits-file`
+(env `CLS_CONC_LIMITS_FILE`) is set — the API's `V1_5` migration already seeds defaults,
+so an unconfigured feed is skipped with a log line rather than re-fed on every boot.
 
 Startup ingest is controlled by `ingest.run-on-startup` (default `true`; env `INGEST_RUN_ON_STARTUP`).
 Set it to `false` to skip the seed jobs on boot — for example when the shared schema has not been
@@ -70,6 +98,7 @@ Development seed files are in `data/mock/`:
 | `data/mock/facilities.csv` | 65 facilities derived from the Agent Bank Summary workbook |
 | `data/mock/lp_master.csv` | 30 LP Master records across all classification tiers |
 | `data/mock/lp_facility_seeds.csv` | 42 LP-to-facility assignments across 5 active facilities |
+| `data/mock/cls_conc_limit_defaults.csv` | Reference feed for `cls-conc-limits-ingest` — 6 classification labels seeded to the upper bound of each `Concentration_Limits.xls` range (Excluded = 0) |
 
 `lp_facility_seeds.csv` links LP Master records to specific facilities, producing `lp_records` rows the same way the ingestion wizard would. It upserts on `(facility_id, investor_name)`, so re-running refreshes seeded values instead of failing on duplicates. These are the default files used on startup (see `ingest.*` properties below).
 
@@ -91,6 +120,7 @@ Both jobs can be triggered independently after startup:
 POST /jobs/facility-ingest?filePath=<absolute-or-relative-path>
 POST /jobs/lp-master-ingest?filePath=<absolute-or-relative-path>
 POST /jobs/lp-records-seed?filePath=<absolute-or-relative-path>
+POST /jobs/cls-conc-limits-ingest?filePath=<absolute-or-relative-path>
 ```
 
 **Response:**
@@ -118,12 +148,13 @@ POST /jobs/lp-records-seed?filePath=<absolute-or-relative-path>
 | `FACILITY_INGEST_FILE` | `data/mock/facilities.csv` | Path to facilities CSV for startup ingest |
 | `LP_MASTER_INGEST_FILE` | `data/mock/lp_master.csv` | Path to LP master CSV for startup ingest |
 | `LP_FACILITY_SEEDS_FILE` | `data/mock/lp_facility_seeds.csv` | Path to LP-facility seed CSV for startup ingest |
+| `CLS_CONC_LIMITS_FILE` | *(unset)* | Path to classification conc-limit defaults CSV; unset → feed skipped at startup |
 | `INGEST_RUN_ON_STARTUP` | `true` | Run the seed jobs on startup; set `false` to skip them |
 | `INGEST_SCHEMA_WAIT_TIMEOUT` | `30s` | How long startup ingest waits for API-owned business tables |
 | `INGEST_SCHEMA_WAIT_INTERVAL` | `2s` | Poll interval while waiting for business tables |
 | `BB_TEMPLATE_IMPORT_ENABLED` | `true` | Import BB template workbooks from the watched directory |
 | `BB_TEMPLATE_IMPORT_DIR` | `data/bb-templates` | Directory scanned for `BB-Template-Import-*.xlsx` workbooks |
-| `PE_SUB_API_URL` | `http://localhost:3001` | `pe-sub-api` base URL used for idempotent template upserts |
+| `PE_SUB_API_URL` | `http://localhost:3001` | `pe-sub-api` base URL used for idempotent template upserts and post-feed config cache reloads |
 | `BB_TEMPLATE_SCAN_INTERVAL` | `30s` | How often to rescan the template directory while running |
 | `BB_TEMPLATE_STABLE_AGE` | `2s` | Minimum file age before import, to avoid partially copied files |
 

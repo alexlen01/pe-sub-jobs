@@ -8,7 +8,6 @@ import org.springframework.batch.core.job.JobExecution;
 import org.springframework.batch.core.job.parameters.JobParameters;
 import org.springframework.batch.core.job.parameters.JobParametersBuilder;
 import org.springframework.batch.core.launch.JobOperator;
-import org.springframework.batch.core.step.StepExecution;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
@@ -116,9 +115,9 @@ public class JobStartupRunner implements ApplicationRunner {
 
             JobExecution execution = jobOperator.start(job, params);
 
-            long reads = execution.getStepExecutions().stream().mapToLong(StepExecution::getReadCount).sum();
-            long writes = execution.getStepExecutions().stream().mapToLong(StepExecution::getWriteCount).sum();
-            long skips = execution.getStepExecutions().stream().mapToLong(StepExecution::getSkipCount).sum();
+            long reads = execution.getStepExecutions().stream().mapToLong(step -> step != null ? step.getReadCount() : 0).sum();
+            long writes = execution.getStepExecutions().stream().mapToLong(step -> step != null ? step.getWriteCount() : 0).sum();
+            long skips = execution.getStepExecutions().stream().mapToLong(step -> step != null ? step.getSkipCount() : 0).sum();
 
             log.info("[{}] finished - status={} reads={} writes={} skips={}",
                     name, execution.getStatus(), reads, writes, skips);

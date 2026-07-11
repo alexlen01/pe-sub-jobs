@@ -33,7 +33,9 @@ public class FacilityRowProcessor implements ItemProcessor<FacilityRow, Processe
                 parseDecimal(item.loanAmount()),
                 parseDate(item.maturityDate()),
                 blankToNull(item.bankStatus()),
-                parseDate(item.bankStatusDate())
+                parseDate(item.bankStatusDate()),
+                parseDecimal(item.ubsParticipation()),
+                parseDate(item.collateralDate())
         );
     }
 

@@ -7,5 +7,7 @@ public record FacilityRow(
         String loanAmount,
         String maturityDate,
         String bankStatus,
-        String bankStatusDate
+        String bankStatusDate,
+        String ubsParticipation,
+        String collateralDate
 ) {}

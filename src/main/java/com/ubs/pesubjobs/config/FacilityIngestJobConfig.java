@@ -62,7 +62,8 @@ public class FacilityIngestJobConfig {
                 .linesToSkip(1)
                 .lineTokenizer(CsvLineTokenizers.lenientQuotedCsvTokenizer(
                         "agentBank", "name", "accountNumber", "loanAmount",
-                        "maturityDate", "bankStatus", "bankStatusDate"))
+                        "maturityDate", "bankStatus", "bankStatusDate",
+                        "ubsParticipation", "collateralDate"))
                 .fieldSetMapper(fs -> new FacilityRow(
                         fs.readString("agentBank"),
                         fs.readString("name"),
@@ -70,7 +71,9 @@ public class FacilityIngestJobConfig {
                         fs.readString("loanAmount"),
                         fs.readString("maturityDate"),
                         fs.readString("bankStatus"),
-                        fs.readString("bankStatusDate")
+                        fs.readString("bankStatusDate"),
+                        fs.readString("ubsParticipation"),
+                        fs.readString("collateralDate")
                 ))
                 .build();
     }
@@ -85,20 +88,24 @@ public class FacilityIngestJobConfig {
         String sql = """
                 INSERT INTO facilities (
                     name, agent_bank, account_number, loan_amount, maturity_date,
-                    bank_status, bank_status_date, status, conc_limit_m, created_at, updated_at
+                    bank_status, bank_status_date, ubs_participation, collateral_date,
+                    status, conc_limit_m, created_at, updated_at
                 )
                 VALUES (
                     :name, :agentBank, :accountNumber, :loanAmount, :maturityDate,
-                    :bankStatus, :bankStatusDate, 'Not Started', 25.00, NOW(), NOW()
+                    :bankStatus, :bankStatusDate, :ubsParticipation, :collateralDate,
+                    'Not Started', 25.00, NOW(), NOW()
                 )
                 ON CONFLICT (name) DO UPDATE SET
-                    agent_bank       = EXCLUDED.agent_bank,
-                    account_number   = EXCLUDED.account_number,
-                    loan_amount      = EXCLUDED.loan_amount,
-                    maturity_date    = EXCLUDED.maturity_date,
-                    bank_status      = EXCLUDED.bank_status,
-                    bank_status_date = EXCLUDED.bank_status_date,
-                    updated_at       = NOW()
+                    agent_bank        = EXCLUDED.agent_bank,
+                    account_number    = EXCLUDED.account_number,
+                    loan_amount       = EXCLUDED.loan_amount,
+                    maturity_date     = EXCLUDED.maturity_date,
+                    bank_status       = EXCLUDED.bank_status,
+                    bank_status_date  = EXCLUDED.bank_status_date,
+                    ubs_participation = EXCLUDED.ubs_participation,
+                    collateral_date   = EXCLUDED.collateral_date,
+                    updated_at        = NOW()
                 """;
 
         return new JdbcBatchItemWriterBuilder<ProcessedFacility>()
@@ -111,8 +118,10 @@ public class FacilityIngestJobConfig {
                     params.addValue("accountNumber",  item.accountNumber());
                     params.addValue("loanAmount",     item.loanAmount());
                     params.addValue("maturityDate",   item.maturityDate());
-                    params.addValue("bankStatus",     item.bankStatus());
-                    params.addValue("bankStatusDate", item.bankStatusDate());
+                    params.addValue("bankStatus",       item.bankStatus());
+                    params.addValue("bankStatusDate",   item.bankStatusDate());
+                    params.addValue("ubsParticipation", item.ubsParticipation());
+                    params.addValue("collateralDate",   item.collateralDate());
                     return params;
                 })
                 .build();

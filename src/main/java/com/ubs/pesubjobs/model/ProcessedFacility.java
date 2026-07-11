@@ -10,5 +10,7 @@ public record ProcessedFacility(
         BigDecimal loanAmount,
         LocalDate maturityDate,
         String bankStatus,
-        LocalDate bankStatusDate
+        LocalDate bankStatusDate,
+        BigDecimal ubsParticipation,
+        LocalDate collateralDate
 ) {}

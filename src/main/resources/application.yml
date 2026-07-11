@@ -1,26 +1,27 @@
 ﻿server:
-  port: ${PORT:3003}
+  port: ${PORT}
 
+# No datasource: pe-sub-jobs is DB-less. All feed writes go through pe-sub-api's SERVICE
+# endpoints (pe-sub-api owns the schema), and Spring Batch runs on an in-memory
+# ResourcelessJobRepository (see ResourcelessBatchConfig).
 spring:
+  profiles:
+    default: local
   application:
     name: pe-sub-jobs
-  datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/pesub}
-    username: ${SPRING_DATASOURCE_USERNAME:pesub}
-    password: ${SPRING_DATASOURCE_PASSWORD:password}
-    driver-class-name: org.postgresql.Driver
   batch:
     job:
+      # Boot's own JobLauncherApplicationRunner must stay off: JobStartupRunner launches the
+      # feeds itself (in dependency order, after waiting for pe-sub-api), and with multiple
+      # jobs registered Boot's runner refuses to start without a spring.batch.job.name anyway.
       enabled: false
-    jdbc:
-      initialize-schema: always
   threads:
     virtual:
       enabled: true
 
 ingest:
-  # Launch the seed jobs on application startup. Disable (e.g. in tests, or when the shared
-  # schema is not yet migrated) to skip them without removing the on-demand /jobs endpoints.
+  # Launch the seed jobs on application startup. Disable (e.g. in tests, or when pe-sub-api
+  # is not yet up) to skip them without removing the on-demand /jobs endpoints.
   run-on-startup: ${INGEST_RUN_ON_STARTUP:true}
   facility-file: ${FACILITY_INGEST_FILE:data/mock/facilities.csv}
   lp-master-file: ${LP_MASTER_INGEST_FILE:data/mock/lp_master.csv}
@@ -28,15 +29,16 @@ ingest:
   # Optional: classification concentration-limit defaults feed (classification,limit_pct).
   # Blank → skipped at startup; trigger on demand via POST /jobs/cls-conc-limits-ingest.
   cls-conc-limits-file: ${CLS_CONC_LIMITS_FILE:}
-  # Used to reload pe-sub-api's in-memory config cache after a config feed run.
-  api-base-url: ${PE_SUB_API_URL:http://localhost:3001}
+  # pe-sub-api base URL — every feed posts to its bulk ingest/seed endpoints.
+  api-base-url: ${PE_SUB_API_URL}
+  # How long to wait for pe-sub-api to answer /api/ping before skipping the startup feeds.
   schema-wait-timeout: ${INGEST_SCHEMA_WAIT_TIMEOUT:30s}
   schema-wait-interval: ${INGEST_SCHEMA_WAIT_INTERVAL:2s}
 
 bb-template-import:
   enabled: ${BB_TEMPLATE_IMPORT_ENABLED:true}
   directory: ${BB_TEMPLATE_IMPORT_DIR:data/bb-templates}
-  api-base-url: ${PE_SUB_API_URL:http://localhost:3001}
+  api-base-url: ${PE_SUB_API_URL}
   scan-interval: ${BB_TEMPLATE_SCAN_INTERVAL:30s}
   stable-age: ${BB_TEMPLATE_STABLE_AGE:2s}
 

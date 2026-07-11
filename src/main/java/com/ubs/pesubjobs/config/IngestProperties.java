@@ -15,7 +15,7 @@ public record IngestProperties(
         // /jobs/cls-conc-limits-ingest endpoint works regardless.
         String clsConcLimitsFile,
         // pe-sub-api base URL, used to reload its in-memory config cache after a config feed.
-        @DefaultValue("http://localhost:3001") String apiBaseUrl,
+        String apiBaseUrl,
         @DefaultValue("30s") Duration schemaWaitTimeout,
         @DefaultValue("2s") Duration schemaWaitInterval,
         // When false, JobStartupRunner does not launch the seed jobs on boot. Defaults true to

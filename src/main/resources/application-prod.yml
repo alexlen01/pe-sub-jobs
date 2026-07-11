@@ -1,0 +1,6 @@
+server:
+  port: ${PROD_JOBS_PORT}
+ingest:
+  api-base-url: ${PROD_API_URL}
+bb-template-import:
+  api-base-url: ${PROD_API_URL}

@@ -1,5 +1,6 @@
 package com.ubs.pesubjobs.config;
 
+import com.ubs.pesubjobs.client.PeSubApiClient;
 import com.ubs.pesubjobs.model.FacilityRow;
 import com.ubs.pesubjobs.model.ProcessedFacility;
 import com.ubs.pesubjobs.processor.FacilityRowProcessor;
@@ -9,8 +10,7 @@ import org.springframework.batch.core.job.builder.JobBuilder;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.Step;
 import org.springframework.batch.core.step.builder.StepBuilder;
-import org.springframework.batch.infrastructure.item.database.JdbcBatchItemWriter;
-import org.springframework.batch.infrastructure.item.database.builder.JdbcBatchItemWriterBuilder;
+import org.springframework.batch.infrastructure.item.ItemWriter;
 import org.springframework.batch.infrastructure.item.file.FlatFileItemReader;
 import org.springframework.batch.infrastructure.item.file.builder.FlatFileItemReaderBuilder;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -18,10 +18,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.FileSystemResource;
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.transaction.PlatformTransactionManager;
 
-import javax.sql.DataSource;
+import java.util.List;
 
 @Configuration
 public class FacilityIngestJobConfig {
@@ -39,7 +38,7 @@ public class FacilityIngestJobConfig {
                                    PlatformTransactionManager txManager,
                                    @Qualifier("facilityReader") FlatFileItemReader<FacilityRow> facilityReader,
                                    FacilityRowProcessor facilityProcessor,
-                                   @Qualifier("facilityWriter") JdbcBatchItemWriter<ProcessedFacility> facilityWriter) {
+                                   @Qualifier("facilityWriter") ItemWriter<ProcessedFacility> facilityWriter) {
         return new StepBuilder("facilityIngestStep", jobRepository)
                 .<FacilityRow, ProcessedFacility>chunk(50)
                 .transactionManager(txManager)
@@ -83,47 +82,12 @@ public class FacilityIngestJobConfig {
         return new FacilityRowProcessor();
     }
 
+    /**
+     * Posts each chunk to pe-sub-api's facility ingest endpoint, which upserts by name.
+     * pe-sub-api owns the facilities schema — this app issues no SQL against it.
+     */
     @Bean("facilityWriter")
-    public JdbcBatchItemWriter<ProcessedFacility> facilityWriter(DataSource dataSource) {
-        String sql = """
-                INSERT INTO facilities (
-                    name, agent_bank, account_number, loan_amount, maturity_date,
-                    bank_status, bank_status_date, ubs_participation, collateral_date,
-                    status, conc_limit_m, created_at, updated_at
-                )
-                VALUES (
-                    :name, :agentBank, :accountNumber, :loanAmount, :maturityDate,
-                    :bankStatus, :bankStatusDate, :ubsParticipation, :collateralDate,
-                    'Not Started', 25.00, NOW(), NOW()
-                )
-                ON CONFLICT (name) DO UPDATE SET
-                    agent_bank        = EXCLUDED.agent_bank,
-                    account_number    = EXCLUDED.account_number,
-                    loan_amount       = EXCLUDED.loan_amount,
-                    maturity_date     = EXCLUDED.maturity_date,
-                    bank_status       = EXCLUDED.bank_status,
-                    bank_status_date  = EXCLUDED.bank_status_date,
-                    ubs_participation = EXCLUDED.ubs_participation,
-                    collateral_date   = EXCLUDED.collateral_date,
-                    updated_at        = NOW()
-                """;
-
-        return new JdbcBatchItemWriterBuilder<ProcessedFacility>()
-                .dataSource(dataSource)
-                .sql(sql)
-                .itemSqlParameterSourceProvider(item -> {
-                    MapSqlParameterSource params = new MapSqlParameterSource();
-                    params.addValue("name",          item.name());
-                    params.addValue("agentBank",      item.agentBank());
-                    params.addValue("accountNumber",  item.accountNumber());
-                    params.addValue("loanAmount",     item.loanAmount());
-                    params.addValue("maturityDate",   item.maturityDate());
-                    params.addValue("bankStatus",       item.bankStatus());
-                    params.addValue("bankStatusDate",   item.bankStatusDate());
-                    params.addValue("ubsParticipation", item.ubsParticipation());
-                    params.addValue("collateralDate",   item.collateralDate());
-                    return params;
-                })
-                .build();
+    public ItemWriter<ProcessedFacility> facilityWriter(PeSubApiClient apiClient) {
+        return chunk -> apiClient.ingestFacilities(List.copyOf(chunk.getItems()));
     }
 }

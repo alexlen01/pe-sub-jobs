@@ -1,5 +1,6 @@
 package com.ubs.pesubjobs;
 
+import com.ubs.pesubjobs.client.PeSubApiClient;
 import com.ubs.pesubjobs.config.IngestProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,7 +12,6 @@ import org.springframework.batch.core.launch.JobOperator;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -28,7 +28,7 @@ public class JobStartupRunner implements ApplicationRunner {
     private final Job lpRecordsSeedJob;
     private final Job clsConcLimitIngestJob;
     private final IngestProperties ingestProperties;
-    private final JdbcTemplate jdbc;
+    private final PeSubApiClient apiClient;
 
     public JobStartupRunner(JobOperator jobOperator,
                             @Qualifier("facilityIngestJob") Job facilityIngestJob,
@@ -36,14 +36,14 @@ public class JobStartupRunner implements ApplicationRunner {
                             @Qualifier("lpRecordsSeedJob") Job lpRecordsSeedJob,
                             @Qualifier("clsConcLimitIngestJob") Job clsConcLimitIngestJob,
                             IngestProperties ingestProperties,
-                            JdbcTemplate jdbc) {
+                            PeSubApiClient apiClient) {
         this.jobOperator = jobOperator;
         this.facilityIngestJob = facilityIngestJob;
         this.lpMasterIngestJob = lpMasterIngestJob;
         this.lpRecordsSeedJob = lpRecordsSeedJob;
         this.clsConcLimitIngestJob = clsConcLimitIngestJob;
         this.ingestProperties = ingestProperties;
-        this.jdbc = jdbc;
+        this.apiClient = apiClient;
     }
 
     @Override
@@ -52,8 +52,8 @@ public class JobStartupRunner implements ApplicationRunner {
             log.info("Startup ingest disabled (ingest.run-on-startup=false) - skipping seed jobs");
             return;
         }
-        if (!waitForBusinessSchema()) {
-            log.warn("Startup ingest skipped because API-owned business tables are not available after {}. Start pe-sub-api first or run /jobs when migrations are complete.",
+        if (!waitForApi()) {
+            log.warn("Startup ingest skipped because pe-sub-api did not become reachable within {}. Start pe-sub-api first or run /jobs once it is up.",
                     ingestProperties.schemaWaitTimeout());
             return;
         }
@@ -70,13 +70,15 @@ public class JobStartupRunner implements ApplicationRunner {
         }
     }
 
-    private boolean waitForBusinessSchema() {
+    // All feeds go through pe-sub-api's endpoints, so the API answering /api/ping IS the
+    // readiness signal — it only serves once its own Flyway migrations have run.
+    private boolean waitForApi() {
         Duration timeout = ingestProperties.schemaWaitTimeout();
         Duration interval = ingestProperties.schemaWaitInterval();
         Instant deadline = Instant.now().plus(timeout);
 
         while (true) {
-            if (businessSchemaReady()) {
+            if (apiClient.isApiReady()) {
                 return true;
             }
             if (!Instant.now().isBefore(deadline)) {
@@ -88,20 +90,6 @@ public class JobStartupRunner implements ApplicationRunner {
                 Thread.currentThread().interrupt();
                 return false;
             }
-        }
-    }
-
-    private boolean businessSchemaReady() {
-        try {
-            Boolean ready = jdbc.queryForObject("""
-                    SELECT to_regclass('public.facilities') IS NOT NULL
-                       AND to_regclass('public.lp_master') IS NOT NULL
-                       AND to_regclass('public.lp_records') IS NOT NULL
-                    """, Boolean.class);
-            return Boolean.TRUE.equals(ready);
-        } catch (Exception e) {
-            log.debug("Business schema readiness check failed: {}", e.getMessage());
-            return false;
         }
     }
 

@@ -141,7 +141,7 @@ public class BbTemplateDirectoryImporter implements ApplicationRunner {
     }
 
     private static String trimTrailingSlash(String raw) {
-        String value = raw != null && !raw.isBlank() ? raw.trim() : "http://localhost:3001";
+        String value = java.util.Objects.requireNonNull(raw, "bb-template-import.api-base-url must be set").trim();
         while (value.endsWith("/")) value = value.substring(0, value.length() - 1);
         return value;
     }

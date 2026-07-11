@@ -1,20 +1,28 @@
 # pe-sub-jobs
 
-Spring Boot 4.1 / Java 25 / Spring Batch 6 data ingestion service for the PE Sub Borrowing Base Platform. Reads flat-file CSV exports and upserts records into the shared PostgreSQL database. Runs at **`http://localhost:3003`**.
+Spring Boot 4.1 / Java 25 / Spring Batch 6 data ingestion service for the PE Sub Borrowing Base Platform. Reads flat-file CSV exports and posts them to `pe-sub-api`'s SERVICE-gated bulk endpoints. Runs at **`http://localhost:3003`**.
+
+**DB-less by design:** this service holds no database connection and issues no SQL. `pe-sub-api`
+owns the schema; every feed writes through its REST endpoints (`POST /api/facilities/ingest`,
+`POST /api/lp-master/ingest`, `POST /api/lpRecords/seed`,
+`PATCH /api/config/cls-conc-limit-defaults`), which also audit the writes. Spring Batch runs on
+an in-memory `ResourcelessJobRepository` — no `BATCH_JOB_*` meta-tables. Run history is not
+persisted and restart-from-failure is unsupported; every feed is an idempotent full-file re-run
+(the API upserts/skips server-side), so replaying is always safe.
 
 ## Stack
 
 - Java 25, Spring Boot 4.1.0, Maven 3.9
-- Spring Batch 6 — chunk-oriented processing, fault-tolerant skip policy
-- Spring JDBC (`JdbcBatchItemWriter`) — direct UPSERT SQL; no JPA
-- PostgreSQL 16 (shared with `pe-sub-api`) — Spring Batch meta-tables auto-created on first startup
+- Spring Batch 6 — chunk-oriented processing, fault-tolerant skip policy, `ResourcelessJobRepository`
+- `RestClient` (`PeSubApiClient`) — one POST per 50-row chunk to `pe-sub-api`; no JDBC, no JPA
 - Logback — daily rolling log to `pe-sub-jobs.log`, gzip-archived, 30-day retention
 
 ## Jobs
 
 ### `facility-ingest`
 
-Reads a CSV of facility records and upserts them into the `facilities` table.
+Reads a CSV of facility records, parses dates/decimals, and posts them to
+`POST /api/facilities/ingest` (upsert by facility name, server-side).
 
 **CSV columns (header row required):**
 
@@ -23,13 +31,14 @@ agent_bank, name, account_number, loan_amount, maturity_date, bank_status, bank_
 ```
 
 - `loan_amount` — plain decimal (no `$` or commas)
-- `maturity_date`, `bank_status_date` — ISO format `YYYY-MM-DD`; blank = `NULL`
-- `name` is the upsert key (`ON CONFLICT (name) DO UPDATE`)
-- New rows get `status = 'Not Started'` and `conc_limit_m = 25.00`; existing rows preserve their platform `status`
+- `maturity_date`, `bank_status_date` — ISO `YYYY-MM-DD` or `M/d/yyyy`; blank = `NULL`
+- `name` is the upsert key
+- New facilities get `status = 'Not Started'` and `conc_limit_m = 25.00`; existing rows preserve their platform `status`
 
 ### `lp-master-ingest`
 
-Reads a CSV of LP Master records and upserts them into the `lp_master` table.
+Reads a CSV of LP Master records, parses booleans/ratings, and posts them to
+`POST /api/lp-master/ingest` (upsert by investor name, server-side).
 
 **CSV columns (header row required):**
 
@@ -41,14 +50,14 @@ ubs_classification, ubs_default_adv_rate, ubs_default_conc_limit, notes
 
 - `spv`, `high_qty`, `investment_grade` — `true` / `false` strings
 - `sp`, `mdy`, `fitch` — rating strings; blank stored as `""`
-- `investor_name` is the upsert key (`ON CONFLICT (investor_name) DO UPDATE`)
+- `investor_name` is the upsert key
 
 ### `cls-conc-limits-ingest`
 
-Reads a CSV of per-classification concentration-limit defaults and merges it into the
-`cls_conc_limit_defaults` config row (jsonb map) in the shared `config` table — the same
-map edited on the UI's Config screen (Per-LP Concentration Limit Defaults card) and used
-by the BB engine's fallback chain (per-LP limit → class default → facility limit).
+Reads a CSV of per-classification concentration-limit defaults and merges it via
+`PATCH /api/config/cls-conc-limit-defaults` into the `cls_conc_limit_defaults` config map —
+the same map edited on the UI's Config screen (Per-LP Concentration Limit Defaults card) and
+used by the BB engine's fallback chain (per-LP limit → class default → facility limit).
 
 **CSV columns (header row required):**
 
@@ -63,9 +72,8 @@ classification, limit_pct
   numeric parse and skip the row)
 - Rows **merge by classification key**: fed classes are overwritten, unfed classes are
   left untouched. En/em dashes in labels are normalized to hyphens
-- After a successful run the job calls `POST {PE_SUB_API_URL}/api/config/reload` so
-  `pe-sub-api`'s in-memory config cache picks the values up immediately; if the API is
-  down this logs a warning and the values apply on its next restart
+- The API persists the merge and refreshes its in-memory config cache in the same call —
+  no follow-up `/api/config/reload` is needed
 
 ## Startup behaviour
 
@@ -75,17 +83,17 @@ All three jobs run automatically once the application is up, in sequence:
 2. `lp-master-ingest` against `ingest.lp-master-file`
 3. `lp-records-seed` against `ingest.lp-facility-seeds-file`
 
-The seed job runs **after** facilities and LP Master because it depends on both tables being populated. Each job logs `status / readCount / writeCount / skipCount` on completion. A failure on one job is caught and logged; the remaining jobs still run. The skip limit per job is 10 rows — exceeding it marks that job `FAILED`.
+The seed job runs **after** facilities and LP Master because the API resolves its rows against both. Each job logs `status / readCount / writeCount / skipCount` on completion. A failure on one job is caught and logged; the remaining jobs still run. The skip limit per job is 10 rows — exceeding it marks that job `FAILED`. Before any job runs, startup waits for `pe-sub-api` to answer `GET /api/ping` (it only serves once its Flyway migrations are done); if it never does within the timeout, the startup feeds are skipped with a warning.
 
 `cls-conc-limits-ingest` runs at startup **only when** `ingest.cls-conc-limits-file`
 (env `CLS_CONC_LIMITS_FILE`) is set — the API's `V1_5` migration already seeds defaults,
 so an unconfigured feed is skipped with a log line rather than re-fed on every boot.
 
 Startup ingest is controlled by `ingest.run-on-startup` (default `true`; env `INGEST_RUN_ON_STARTUP`).
-Set it to `false` to skip the seed jobs on boot — for example when the shared schema has not been
-migrated yet, or in tests (the integration base sets it `false` so jobs don't run against the empty
-embedded database, whose business tables are owned by `pe-sub-api`'s migrations). Disabling startup
-ingest does **not** remove the on-demand REST triggers below.
+Set it to `false` to skip the seed jobs on boot — for example when `pe-sub-api` is not running,
+or in tests (the integration base sets it `false`; job tests launch jobs explicitly against a
+mocked `PeSubApiClient`). Disabling startup ingest does **not** remove the on-demand REST
+triggers below.
 
 Jobs can also be triggered on demand via REST (see [REST API](#rest-api)).
 
@@ -100,17 +108,17 @@ Development seed files are in `data/mock/`:
 | `data/mock/lp_facility_seeds.csv` | 42 LP-to-facility assignments across 5 active facilities |
 | `data/mock/cls_conc_limit_defaults.csv` | Reference feed for `cls-conc-limits-ingest` — 6 classification labels seeded to the upper bound of each `Concentration_Limits.xls` range (Excluded = 0) |
 
-`lp_facility_seeds.csv` links LP Master records to specific facilities, producing `lp_records` rows the same way the ingestion wizard would. It upserts on `(facility_id, investor_name)`, so re-running refreshes seeded values instead of failing on duplicates. These are the default files used on startup (see `ingest.*` properties below).
+`lp_facility_seeds.csv` links LP Master records to specific facilities, producing `lp_records` rows the same way the ingestion wizard would. The API inserts a row only when that (facility, investor) pair has none yet — `lp_records` intentionally has **no** unique constraint on the pair (multi-sleeve) — so re-running is a safe no-op that never overwrites records committed through the Shadow BB flow. These are the default files used on startup (see `ingest.*` properties below).
 
 ## Getting started
 
 ```bash
-# PostgreSQL must be running (shared with pe-sub-api)
+# pe-sub-api must be running at PE_SUB_API_URL (default http://localhost:3001)
 
 mvn spring-boot:run
 ```
 
-On startup the app creates the Spring Batch meta-tables in the shared database (if they don't exist) and immediately runs both ingest jobs against the mock data files.
+On startup the app waits for `pe-sub-api` to answer `/api/ping`, then runs the ingest jobs against the mock data files. No database is required.
 
 ## REST API
 
@@ -140,21 +148,18 @@ POST /jobs/cls-conc-limits-ingest?filePath=<absolute-or-relative-path>
 
 | Variable | Default | Description |
 |---|---|---|
-| `SPRING_DATASOURCE_URL` | `jdbc:postgresql://localhost:5432/pesub` | JDBC connection URL |
-| `SPRING_DATASOURCE_USERNAME` | `pesub` | DB username |
-| `SPRING_DATASOURCE_PASSWORD` | `password` | DB password |
-| `PORT` | `3003` | HTTP port |
+| `PORT` | `3003` (local profile) | HTTP port |
 | `LOG_PATH` | `logs` | Log output directory |
 | `FACILITY_INGEST_FILE` | `data/mock/facilities.csv` | Path to facilities CSV for startup ingest |
 | `LP_MASTER_INGEST_FILE` | `data/mock/lp_master.csv` | Path to LP master CSV for startup ingest |
 | `LP_FACILITY_SEEDS_FILE` | `data/mock/lp_facility_seeds.csv` | Path to LP-facility seed CSV for startup ingest |
 | `CLS_CONC_LIMITS_FILE` | *(unset)* | Path to classification conc-limit defaults CSV; unset → feed skipped at startup |
 | `INGEST_RUN_ON_STARTUP` | `true` | Run the seed jobs on startup; set `false` to skip them |
-| `INGEST_SCHEMA_WAIT_TIMEOUT` | `30s` | How long startup ingest waits for API-owned business tables |
-| `INGEST_SCHEMA_WAIT_INTERVAL` | `2s` | Poll interval while waiting for business tables |
+| `INGEST_SCHEMA_WAIT_TIMEOUT` | `30s` | How long startup ingest waits for pe-sub-api to answer `/api/ping` |
+| `INGEST_SCHEMA_WAIT_INTERVAL` | `2s` | Poll interval while waiting for pe-sub-api |
 | `BB_TEMPLATE_IMPORT_ENABLED` | `true` | Import BB template workbooks from the watched directory |
 | `BB_TEMPLATE_IMPORT_DIR` | `data/bb-templates` | Directory scanned for `BB-Template-Import-*.xlsx` workbooks |
-| `PE_SUB_API_URL` | `http://localhost:3001` | `pe-sub-api` base URL used for idempotent template upserts and post-feed config cache reloads |
+| `PE_SUB_API_URL` | `http://localhost:3001` (local profile) | `pe-sub-api` base URL — target of every feed (ingest/seed endpoints) and template upserts |
 | `BB_TEMPLATE_SCAN_INTERVAL` | `30s` | How often to rescan the template directory while running |
 | `BB_TEMPLATE_STABLE_AGE` | `2s` | Minimum file age before import, to avoid partially copied files |
 
@@ -182,19 +187,23 @@ java -jar target/pe-sub-jobs-1.0.0.jar
 
 ## Testing
 
-**Zonky embedded Postgres only.** Any test that boots the Spring context must extend `IntegrationTestBase`, which starts Zonky's in-process PostgreSQL (`@AutoConfigureEmbeddedDatabase(provider = ZONKY)`) — no Docker, no external `localhost:5432`. Never use H2 or Testcontainers; test behaviour must match production PostgreSQL 16 exactly.
+**No database.** The app is DB-less, so tests are too: any test that boots the Spring context extends `IntegrationTestBase`, which replaces `PeSubApiClient` with a Mockito mock (`@MockitoBean`). Job tests run the real reader/processor pipeline against temp CSV files and assert the payloads handed to the API client; the write semantics themselves (upsert/skip/merge) are pe-sub-api's responsibility and are covered by its `SeedIngestEndpointsIntegrationTest`.
 
 ## Project structure
 
 ```
 src/main/java/com/ubs/pesubjobs/
   PeSubJobsApplication.java        @SpringBootApplication + @ConfigurationPropertiesScan
-  JobStartupRunner.java            ApplicationRunner — runs both jobs on startup
+  JobStartupRunner.java            ApplicationRunner — waits for /api/ping, runs the feeds
+  client/
+    PeSubApiClient.java            RestClient wrapper — all pe-sub-api ingest/seed calls
   config/
     IngestProperties.java          @ConfigurationProperties(prefix = "ingest")
-    FacilityIngestJobConfig.java   Job + Step + @StepScope reader + UPSERT writer
+    ResourcelessBatchConfig.java   In-memory JobRepository/JobOperator — no BATCH_* tables
+    FacilityIngestJobConfig.java   Job + Step + @StepScope reader + API-posting writer
     LpMasterIngestJobConfig.java
-    LpRecordsSeedJobConfig.java    Seeds lp_records by linking LP Master → facilities
+    LpRecordsSeedJobConfig.java    Posts raw seed rows; the API resolves names + merges LP Master
+    ClsConcLimitIngestJobConfig.java
   controller/
     JobController.java             POST /jobs/{jobName}
   exception/
@@ -204,14 +213,14 @@ src/main/java/com/ubs/pesubjobs/
     ProcessedFacility.java         Type-safe record (BigDecimal, LocalDate)
     LpMasterRow.java
     ProcessedLpMaster.java
-    LpFacilitySeedRow.java         Raw seed CSV row
-    ProcessedLpFacilitySeed.java   Fully resolved seed row (facility_id, lp_master_id + all LP fields)
+    LpFacilitySeedRow.java         Raw seed CSV row — posted to the API verbatim
+    ClsConcLimitRow.java / ProcessedClsConcLimit.java
   processor/
     FacilityRowProcessor.java      Parses dates/decimals; returns null to skip invalid rows
     LpMasterRowProcessor.java      Parses booleans; normalises blank ratings to ""
-    LpFacilitySeedRowProcessor.java  JDBC lookup of facility + LP Master; resolves all FK fields
+    ClsConcLimitRowProcessor.java  Percent parsing + range check + dash normalization
 src/main/resources/
-  application.yml
+  application.yml (+ application-{local,dev,qa,prod}.yml)
   logback-spring.xml
 data/mock/
   facilities.csv

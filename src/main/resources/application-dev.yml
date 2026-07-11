@@ -1,0 +1,6 @@
+server:
+  port: ${DEV_JOBS_PORT}
+ingest:
+  api-base-url: ${DEV_API_URL}
+bb-template-import:
+  api-base-url: ${DEV_API_URL}

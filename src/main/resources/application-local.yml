@@ -1,0 +1,6 @@
+server:
+  port: 3003
+ingest:
+  api-base-url: http://localhost:3001
+bb-template-import:
+  api-base-url: http://localhost:3001

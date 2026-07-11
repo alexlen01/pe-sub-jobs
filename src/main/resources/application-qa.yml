@@ -1,0 +1,6 @@
+server:
+  port: ${QA_JOBS_PORT}
+ingest:
+  api-base-url: ${QA_API_URL}
+bb-template-import:
+  api-base-url: ${QA_API_URL}

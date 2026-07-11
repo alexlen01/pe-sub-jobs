@@ -9,6 +9,6 @@ import java.time.Duration;
 public record BbTemplateImportProperties(
         @DefaultValue("true") boolean enabled,
         @DefaultValue("data/bb-templates") String directory,
-        @DefaultValue("http://localhost:3001") String apiBaseUrl,
+        String apiBaseUrl,
         @DefaultValue("30s") Duration scanInterval,
         @DefaultValue("2s") Duration stableAge) {}

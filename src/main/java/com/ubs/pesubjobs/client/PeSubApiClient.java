@@ -43,6 +43,20 @@ public class PeSubApiClient {
         return post("/api/lp-master/ingest", rows);
     }
 
+    /**
+     * Wipes the LP Master table ahead of a full repopulate ("override, do not preserve") from the
+     * one-off LP DB extract feed. Runs once as the lp-master ingest job's pre-step, before the
+     * chunked upsert, so re-running the feed does not leave stale master rows. SERVICE-gated;
+     * facility LP records are detached (not deleted) by the API.
+     */
+    public void clearLpMaster() {
+        rest.post()
+                .uri("/api/lp-master/clear")
+                .retrieve()
+                .toBodilessEntity();
+        log.info("POST /api/lp-master/clear -> LP Master cleared for repopulate");
+    }
+
     public ApiIngestSummary seedLpRecords(List<? extends LpFacilitySeedRow> rows) {
         return post("/api/lpRecords/seed", rows);
     }

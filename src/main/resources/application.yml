@@ -23,9 +23,9 @@ ingest:
   # Launch the seed jobs on application startup. Disable (e.g. in tests, or when pe-sub-api
   # is not yet up) to skip them without removing the on-demand /jobs endpoints.
   run-on-startup: ${INGEST_RUN_ON_STARTUP:true}
-  facility-file: ${FACILITY_INGEST_FILE:data/mock/facilities.csv}
-  lp-master-file: ${LP_MASTER_INGEST_FILE:data/mock/lp_master.csv}
-  lp-facility-seeds-file: ${LP_FACILITY_SEEDS_FILE:data/mock/lp_facility_seeds.csv}
+  facility-file: ${FACILITY_INGEST_FILE:data/out/facilities.csv}
+  lp-master-file: ${LP_MASTER_INGEST_FILE:data/out/lp_master.csv}
+  lp-facility-seeds-file: ${LP_FACILITY_SEEDS_FILE:data/out/lp_facility_seeds.csv}
   # Optional: classification concentration-limit defaults feed (classification,limit_pct).
   # Blank → skipped at startup; trigger on demand via POST /jobs/cls-conc-limits-ingest.
   cls-conc-limits-file: ${CLS_CONC_LIMITS_FILE:}

@@ -10,7 +10,9 @@ import org.springframework.batch.core.job.builder.JobBuilder;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.Step;
 import org.springframework.batch.core.step.builder.StepBuilder;
+import org.springframework.batch.core.step.tasklet.Tasklet;
 import org.springframework.batch.infrastructure.item.ItemWriter;
+import org.springframework.batch.infrastructure.repeat.RepeatStatus;
 import org.springframework.batch.infrastructure.item.file.FlatFileItemReader;
 import org.springframework.batch.infrastructure.item.file.builder.FlatFileItemReaderBuilder;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -27,9 +29,26 @@ public class LpMasterIngestJobConfig {
 
     @Bean
     public Job lpMasterIngestJob(JobRepository jobRepository,
+                                 @Qualifier("lpMasterClearStep") Step lpMasterClearStep,
                                  @Qualifier("lpMasterIngestStep") Step lpMasterIngestStep) {
+        // Clear-then-load: LP Master is repopulated wholesale from the extract feed ("override,
+        // do not preserve"), so the table is wiped once up front before the chunked upsert.
         return new JobBuilder("lpMasterIngestJob", jobRepository)
-                .start(lpMasterIngestStep)
+                .start(lpMasterClearStep)
+                .next(lpMasterIngestStep)
+                .build();
+    }
+
+    @Bean("lpMasterClearStep")
+    public Step lpMasterClearStep(JobRepository jobRepository,
+                                  PlatformTransactionManager txManager,
+                                  PeSubApiClient apiClient) {
+        Tasklet tasklet = (contribution, chunkContext) -> {
+            apiClient.clearLpMaster();
+            return RepeatStatus.FINISHED;
+        };
+        return new StepBuilder("lpMasterClearStep", jobRepository)
+                .tasklet(tasklet, txManager)
                 .build();
     }
 

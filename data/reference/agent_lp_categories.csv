@@ -1,0 +1,22 @@
+## Agent LP Category (the export's "Classification" column) -> canonical Agent LP Classification.
+## The `canonical` value MUST be one of classification_config.AGENT_CLS_OPTS (pe-sub-api
+## V1_3__config.sql): "Rated Included", "Non-Rated Included", "Designated Institutional",
+## "Designated PWM", "Ineligible Investor". Matching is case/punctuation-insensitive. Unmatched raw
+## values are passed through unchanged AND dumped to unmatched_agent_categories.csv for review.
+## Canonical values are listed as self-aliases so an already-clean feed passes straight through.
+alias,canonical
+Rated Included,Rated Included
+Rated Included Investors,Rated Included
+Rated,Rated Included
+Non-Rated Included,Non-Rated Included
+Non-Rated Included Investors,Non-Rated Included
+Non Rated Included Investors,Non-Rated Included
+Included Investors,Non-Rated Included
+Designated Institutional,Designated Institutional
+Fund-Of-Fund Designated Investors,Designated Institutional
+Designated Investors,Designated Institutional
+Designated,Designated Institutional
+Designated PWM,Designated PWM
+Ineligible Investor,Ineligible Investor
+Ineligible Investors,Ineligible Investor
+Ineligible,Ineligible Investor

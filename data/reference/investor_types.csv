@@ -1,0 +1,20 @@
+## Supported Investor Types — canonical values the extract normalizes into. Mirrors
+## classification_config.INVESTOR_TYPE_OPTS (pe-sub-api V1_3__config.sql). Keep in sync with Config.
+## One canonical value per row; '#'/'##' comment lines and blank lines are ignored. Add known raw
+## spellings/labels to investor_type_aliases.csv (not here).
+investor_type
+Pension Fund
+Endowment
+Foundation
+Family Office
+Fund of Funds
+Sovereign Wealth Fund
+Insurance Company
+Healthcare
+Corporate
+Public Pension
+Investment Consultant
+Institutional Investor
+Hedge Fund
+Other Institutional
+HNW

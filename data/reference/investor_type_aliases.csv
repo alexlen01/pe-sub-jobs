@@ -1,0 +1,17 @@
+## Investor Type aliases: known raw export spellings/labels -> canonical value in investor_types.csv.
+## Matching is case/punctuation-insensitive, so only list genuinely different wordings here.
+## Anything not resolvable (exact, or via an alias below) is passed through unchanged AND dumped to
+## unmatched_investor_types.csv for analyst cleanup. Add rows here as new variants are confirmed.
+alias,canonical
+Other Institutional Investors,Other Institutional
+Other Institutional Investor,Other Institutional
+FOF & Other Asset Manager,Fund of Funds
+Fund-of-Funds,Fund of Funds
+Fund of Fund,Fund of Funds
+FoF,Fund of Funds
+SWF,Sovereign Wealth Fund
+Sovereign Wealth,Sovereign Wealth Fund
+Insurance,Insurance Company
+Endowments,Endowment
+Foundations,Foundation
+Family Offices,Family Office

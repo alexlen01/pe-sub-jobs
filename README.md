@@ -108,7 +108,9 @@ Development seed files are in `data/mock/`:
 | `data/mock/lp_facility_seeds.csv` | 42 LP-to-facility assignments across 5 active facilities |
 | `data/mock/cls_conc_limit_defaults.csv` | Reference feed for `cls-conc-limits-ingest` — 6 classification labels seeded to the upper bound of each `Concentration_Limits.xls` range (Excluded = 0) |
 
-`lp_facility_seeds.csv` links LP Master records to specific facilities, producing `lp_records` rows the same way the ingestion wizard would. The API inserts a row only when that (facility, investor) pair has none yet — `lp_records` intentionally has **no** unique constraint on the pair (multi-sleeve) — so re-running is a safe no-op that never overwrites records committed through the Shadow BB flow. These are the default files used on startup (see `ingest.*` properties below).
+`lp_facility_seeds.csv` links LP Master records to specific facilities, producing `lp_records` rows the same way the ingestion wizard would. Since the D2 revision (see `pe-sub-docs/LP_DB_EXTRACT_DESIGN.md`) each seed row carries the **full per-LP column set** of the LP DB Export (31 columns: the legacy 7 first, then parent, spv, high_qty, investor_type, inst_vs_hnw, region_location, investment_grade, ubs_cls, sp, mdy, fitch, aum, nav, pension, pension_funded, pct_cap_commit, called_cap, pct_uncalled, pct_called, ubs_conc, ubs_rate, agent_bb, ubs_bb, notes) — `ubs_cls` is derived per row from that row's attributes (ratings, pension assets, NAV, AUM, HNW/SPV flags) via the Borrowing Base Criteria Matrix (`data/reference/bb_criteria_matrix.csv`, transcribed from `pe-sub-docs/BB_CRITERIA_DESIGN.md`), and the row's UBSAR/AgentAR advance rates are slotted into the discrete 90/75/65/50/0 rate groups by the Floor Map (`data/reference/rate_floor_map.csv`). Row values win server-side; the LP Master profile only fills blanks, and a legacy 7-column file still parses (the reader is non-strict and pads blanks). The API inserts a row only when that (facility, investor) pair has none yet — `lp_records` intentionally has **no** unique constraint on the pair (multi-sleeve) — so re-running is a safe no-op that never overwrites records committed through the Shadow BB flow. The startup defaults point at the extract output in `data/out/` (see `ingest.*` properties below).
+
+The extract's input is the simulated, date-stamped LP DB Export produced by `scripts/lp_db_generate.py` into `data/import/`. The generator's built-in **chaos monkey** (`CHAOS_ENABLED`/`CHAOS_SEED` tunables; see `pe-sub-docs/"AI Chaos Monkey for Data Quality.md"`) degrades the values written to the XLSX to realistic manual-entry quality — name drift, `A minus` ratings, unit mix-ups, NAV range strings, categorical drift — while leaving cash/identity columns pristine, and logs every mutation to `data/import/<export name>.chaos_log.csv` as ground truth. `lp_db_extract.py` reads whatever file it is given **as-is** (no cleaning toggle), the same posture it needs for a real export; its unmatched/variance reports plus the chaos log show what the normalizers absorbed.
 
 ## Getting started
 
@@ -150,9 +152,9 @@ POST /jobs/cls-conc-limits-ingest?filePath=<absolute-or-relative-path>
 |---|---|---|
 | `PORT` | `3003` (local profile) | HTTP port |
 | `LOG_PATH` | `logs` | Log output directory |
-| `FACILITY_INGEST_FILE` | `data/mock/facilities.csv` | Path to facilities CSV for startup ingest |
-| `LP_MASTER_INGEST_FILE` | `data/mock/lp_master.csv` | Path to LP master CSV for startup ingest |
-| `LP_FACILITY_SEEDS_FILE` | `data/mock/lp_facility_seeds.csv` | Path to LP-facility seed CSV for startup ingest |
+| `FACILITY_INGEST_FILE` | `data/out/facilities.csv` | Path to facilities CSV for startup ingest |
+| `LP_MASTER_INGEST_FILE` | `data/out/lp_master.csv` | Path to LP master CSV for startup ingest |
+| `LP_FACILITY_SEEDS_FILE` | `data/out/lp_facility_seeds.csv` | Path to LP-facility seed CSV for startup ingest (full 31-column D2-revised format; legacy 7-column files still parse) |
 | `CLS_CONC_LIMITS_FILE` | *(unset)* | Path to classification conc-limit defaults CSV; unset → feed skipped at startup |
 | `INGEST_RUN_ON_STARTUP` | `true` | Run the seed jobs on startup; set `false` to skip them |
 | `INGEST_SCHEMA_WAIT_TIMEOUT` | `30s` | How long startup ingest waits for pe-sub-api to answer `/api/ping` |
@@ -202,7 +204,7 @@ src/main/java/com/ubs/pesubjobs/
     ResourcelessBatchConfig.java   In-memory JobRepository/JobOperator — no BATCH_* tables
     FacilityIngestJobConfig.java   Job + Step + @StepScope reader + API-posting writer
     LpMasterIngestJobConfig.java
-    LpRecordsSeedJobConfig.java    Posts raw seed rows; the API resolves names + merges LP Master
+    LpRecordsSeedJobConfig.java    Posts raw seed rows (full 31-column set); the API resolves names, row values win, LP Master fills blanks
     ClsConcLimitIngestJobConfig.java
   controller/
     JobController.java             POST /jobs/{jobName}
@@ -213,7 +215,7 @@ src/main/java/com/ubs/pesubjobs/
     ProcessedFacility.java         Type-safe record (BigDecimal, LocalDate)
     LpMasterRow.java
     ProcessedLpMaster.java
-    LpFacilitySeedRow.java         Raw seed CSV row — posted to the API verbatim
+    LpFacilitySeedRow.java         Raw seed CSV row (full per-LP column set) — posted to the API verbatim
     ClsConcLimitRow.java / ProcessedClsConcLimit.java
   processor/
     FacilityRowProcessor.java      Parses dates/decimals; returns null to skip invalid rows

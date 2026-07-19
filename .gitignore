@@ -9,10 +9,10 @@ spring-boot-devtools.properties
 # Runtime output
 logs/
 
-# LP DB one-off extract (data/lp_db_extract.py). End-user data is NOT committed:
+# LP DB one-off extract (scripts/lp_db_extract.py). End-user data is NOT committed:
 #   data/import/ - real LP DB Export dropped in for a run (bulky, confidential source)
 #   data/out/    - generated CSVs derived from that real data
 # Tracked (source): data/mock/ (mock seed data), data/reference/ (Config-seeded lists),
-# data/bb-templates/, and the extract scripts themselves.
-#data/import/
+# data/bb-templates/, and the scripts/ directory itself.
+data/import/
 data/out/

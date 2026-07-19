@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 #
-# Wrapper for pe-sub-jobs/scripts/lp_db_extract.py — the standalone LP DB Export -> seed extract,
-# for Linux/macOS terminals. Resolves its own location so it runs from any working directory.
+# Wrapper for pe-sub-jobs/scripts/lp_db_generate.py — regenerates the simulated, chaos-degraded
+# LP DB Export XLSX in data/import/ — for Linux/macOS terminals. Resolves its own location so it
+# runs from any working directory.
 #
-# There are NO arguments: set the export to process by editing the EXPORT_FILE variable near the
-# top of lp_db_extract.py, then run this wrapper.
+# There are NO arguments: tune the constants near the top of lp_db_generate.py (SEED,
+# CHAOS_ENABLED, CHAOS_SEED, TARGET_ROWS, ...), then run this wrapper. Re-run
+# lp_db_extract.sh afterwards to produce the seed CSVs.
 #
-#   chmod +x pe-sub-jobs/scripts/lp_db_extract.sh   # once
-#   ./pe-sub-jobs/scripts/lp_db_extract.sh          # or: bash pe-sub-jobs/scripts/lp_db_extract.sh
+#   chmod +x pe-sub-jobs/scripts/lp_db_generate.sh   # once
+#   ./pe-sub-jobs/scripts/lp_db_generate.sh          # or: bash pe-sub-jobs/scripts/lp_db_generate.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PY_SCRIPT="$SCRIPT_DIR/lp_db_extract.py"
+PY_SCRIPT="$SCRIPT_DIR/lp_db_generate.py"
 
 if [[ ! -f "$PY_SCRIPT" ]]; then
   echo "error: cannot find $PY_SCRIPT" >&2

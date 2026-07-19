@@ -61,7 +61,12 @@ public class LpRecordsSeedJobConfig {
                 .linesToSkip(1)
                 .lineTokenizer(CsvLineTokenizers.lenientQuotedCsvTokenizer(
                         "facilityName", "investorName", "capCommit", "uncalled",
-                        "agentCls", "agentRate", "agentConc"))
+                        "agentCls", "agentRate", "agentConc",
+                        "parent", "spv", "highQty", "investorType", "instVsHnw",
+                        "regionLocation", "investmentGrade", "ubsCls", "sp", "mdy", "fitch",
+                        "aum", "nav", "pension", "pensionFunded", "pctCapCommit", "calledCap",
+                        "pctUncalled", "pctCalled", "ubsConc", "ubsRate", "agentBb", "ubsBb",
+                        "notes"))
                 .fieldSetMapper(fs -> new LpFacilitySeedRow(
                         fs.readString("facilityName"),
                         fs.readString("investorName"),
@@ -69,7 +74,31 @@ public class LpRecordsSeedJobConfig {
                         fs.readString("uncalled"),
                         fs.readString("agentCls"),
                         fs.readString("agentRate"),
-                        fs.readString("agentConc")))
+                        fs.readString("agentConc"),
+                        fs.readString("parent"),
+                        fs.readString("spv"),
+                        fs.readString("highQty"),
+                        fs.readString("investorType"),
+                        fs.readString("instVsHnw"),
+                        fs.readString("regionLocation"),
+                        fs.readString("investmentGrade"),
+                        fs.readString("ubsCls"),
+                        fs.readString("sp"),
+                        fs.readString("mdy"),
+                        fs.readString("fitch"),
+                        fs.readString("aum"),
+                        fs.readString("nav"),
+                        fs.readString("pension"),
+                        fs.readString("pensionFunded"),
+                        fs.readString("pctCapCommit"),
+                        fs.readString("calledCap"),
+                        fs.readString("pctUncalled"),
+                        fs.readString("pctCalled"),
+                        fs.readString("ubsConc"),
+                        fs.readString("ubsRate"),
+                        fs.readString("agentBb"),
+                        fs.readString("ubsBb"),
+                        fs.readString("notes")))
                 .build();
     }
 

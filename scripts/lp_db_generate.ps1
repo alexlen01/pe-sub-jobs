@@ -1,12 +1,14 @@
 <#
-    Wrapper for pe-sub-jobs/scripts/lp_db_extract.py — the standalone LP DB Export -> seed extract,
-    for Windows PowerShell. Resolves its own location so it runs from any working directory.
+    Wrapper for pe-sub-jobs/scripts/lp_db_generate.py — regenerates the simulated, chaos-degraded
+    LP DB Export XLSX in data/import/ — for Windows PowerShell. Resolves its own location so it
+    runs from any working directory.
 
-    There are NO arguments: set the export to process by editing the EXPORT_FILE variable near the
-    top of lp_db_extract.py, then run this wrapper.
+    There are NO arguments: tune the constants near the top of lp_db_generate.py (SEED,
+    CHAOS_ENABLED, CHAOS_SEED, TARGET_ROWS, ...), then run this wrapper. Re-run
+    lp_db_extract.ps1 afterwards to produce the seed CSVs.
 
         # from anywhere:
-        powershell -ExecutionPolicy Bypass -File pe-sub-jobs\scripts\lp_db_extract.ps1
+        powershell -ExecutionPolicy Bypass -File pe-sub-jobs\scripts\lp_db_generate.ps1
 
     If PowerShell blocks the script ("running scripts is disabled"), the -ExecutionPolicy Bypass
     above runs it without changing any machine setting. To allow .ps1 files for your user once:
@@ -15,7 +17,7 @@
 $ErrorActionPreference = 'Stop'
 
 $ScriptDir = $PSScriptRoot
-$PyScript  = Join-Path $ScriptDir 'lp_db_extract.py'
+$PyScript  = Join-Path $ScriptDir 'lp_db_generate.py'
 
 if (-not (Test-Path -LiteralPath $PyScript)) {
     Write-Error "cannot find $PyScript"

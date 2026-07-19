@@ -1,0 +1,19 @@
+## Borrowing Base Criteria Matrix — transcribed from pe-sub-docs/BB_CRITERIA_DESIGN.md (tab 2 of
+## Concentration_Limits.xlsx), the same bb_criteria_matrix config key Run Shadow BB resolves against.
+## One row per UBS LP Classification; "Rated Investor" carries one row PER RATING BAND (AAA/AA/A/BBB;
+## a rating below BBB- clamps to the BBB band per Q2 — a rated LP is never reclassified out of Rated).
+## Advance rate is funded-split: adv_rate_lt40_pct applies below 40% called, adv_rate_gte40_pct at
+## 40% or more (inclusive). Concentration limit is funded-independent. Keep in sync with Config.
+ubs_classification,rating_band,conc_limit_pct,adv_rate_lt40_pct,adv_rate_gte40_pct
+Rated Investor,AAA,25,90,90
+Rated Investor,AA,20,90,90
+Rated Investor,A,15,90,90
+Rated Investor,BBB,10,65,90
+Corp Pension > $5Bn Assets,,25,90,90
+Corp Pension > $1Bn Assets,,20,90,90
+Unrated NAV > $1Bn,,15,90,90
+FoF & Other > $10Bn AUM,,10,65,75
+Other Institutional,,5,50,65
+HNW Feeder (acceptable),,5,50,65
+HNW (acceptable),,1,0,50
+Excluded,,0,0,0

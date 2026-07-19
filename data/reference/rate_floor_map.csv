@@ -1,0 +1,17 @@
+## The Floor Map — explicit range boundaries that slot a raw advance rate into its discrete rate
+## group. Applies to BOTH UBSAR and AgentAR when the extract maps them (seed agent_rate/ubs_rate,
+## LP Master ubs_default_adv_rate, and the matrix variance cross-check). A rate takes the group of
+## the highest 'min_rate_pct' it meets or exceeds; the min=0 floor catches everything below 50%:
+##   >= 90%          -> 90% group
+##   75%  to 89.9%   -> 75% group
+##   65%  to 74.9%   -> 65% group
+##   50%  to 64.9%   -> 50% group
+##   <  50%          ->  0% group
+## The group set matches the platform's BUSA advance-rate buckets (90/75/65/50/0). Keep in sync
+## with Config.
+min_rate_pct,group_pct
+90,90
+75,75
+65,65
+50,50
+0,0

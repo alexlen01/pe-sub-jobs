@@ -1,35 +1,16 @@
 #!/usr/bin/env python3
 r"""
-Agent BB workbook analyzer → BB template import workbook generator
+Parse Excel workbook → generate BB template
 
-Analyzes a raw Agent BB or investor-list workbook, detects LP-grid sheets and column structure,
-and generates a structured BB-Template-Import-<slug>.xlsx meta-workbook ready for pe-sub-jobs to
-pick up and register. pe-sub-jobs watches data/bb-templates/ and automatically upserts any
-BB-Template-Import-*.xlsx file it finds via POST /api/bb-templates/import?mode=upsert.
-
-This script ports TemplateProfiler.java heuristics to Python (live fetch from pe-sub-api's
-Field Mapping Dictionary at GET {api}/api/field-mapping/alias-groups, or cached/bundled fallback)
-so Agent BB workbooks can be templated offline in bulk or when pe-sub-api is unreachable.
+Analyzes a raw Agent BB or investor-list workbook and generates a BB-Template-Import-<slug>.xlsx
+meta-workbook. pe-sub-jobs watches data/bb-templates/ and automatically picks up and upserts any
+BB-Template-Import-*.xlsx file it finds.
 
 USAGE
-    python parse_excel_templates.py <workbook.xlsx> [options]
+    python parse_excel_templates.py <workbook.xlsx>
 
-    --facility / --slug TEXT     Override the derived template_slug (else from filename)
-    --agent-bank TEXT            Override the inferred agent bank name
-    --template-class {A,B,C}     Default "A" (not structurally inferable)
-    --analyze                    Print analysis summary; do not write the template file
-    --offline                    Skip the live Field Mapping Dictionary fetch
-    --refresh-dictionary         Force a live refetch + cache update
-    --api-url TEXT               pe-sub-api base URL (default $PE_SUB_API_URL or localhost:3001)
-    --min-header-matches INT     Header-detection threshold (default 3)
-    --max-rows-per-sheet INT     Safety cap per sheet (default 10000)
-    --no-color-scan              Skip cell-color/legend detection (faster on large files)
-    -v, --verbose
-
-Examples:
-    python parse_excel_templates.py data/import/some-agent-bb.xlsx
-    python parse_excel_templates.py data/import/some-agent-bb.xlsx --facility aep-viii --analyze
-    python parse_excel_templates.py data/import/some-agent-bb.xlsx --facility aep-viii -v
+Example:
+    python parse_excel_templates.py data/import/agent-bb.xlsx
 """
 from __future__ import annotations
 
@@ -37,6 +18,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 import urllib.error
 import urllib.request
@@ -291,13 +273,20 @@ def load_dictionary(api_url: str, offline: bool, refresh: bool, verbose: bool) -
 
 
 def _cleanup_cache() -> None:
-    """Remove the Field Mapping Dictionary cache file after analysis completes.
+    """Remove the Field Mapping Dictionary cache file and __pycache__ after analysis completes.
     (Regenerable on next run; not kept between invocations.)"""
     if DICTIONARY_CACHE_FILE.is_file():
         try:
             DICTIONARY_CACHE_FILE.unlink()
         except OSError:
             pass  # If deletion fails, continue silently — cache is not load-critical.
+
+    pycache_dir = SCRIPT_DIR / "__pycache__"
+    if pycache_dir.is_dir():
+        try:
+            shutil.rmtree(pycache_dir)
+        except OSError:
+            pass  # If deletion fails, continue silently — not load-critical.
 
 
 # ==============================================================================================
@@ -888,29 +877,9 @@ def render_summary(analysis: WorkbookAnalysis, envelope: dict) -> str:
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="parse_excel_templates.py",
-        description="Analyze a raw Agent BB / investor-list workbook and propose a BB template "
-                    "definition (mirrors pe-sub-api's TemplateProfiler; see module docstring).",
+        description="Analyze a raw Agent BB or investor-list workbook and generate a BB template.",
     )
-    p.add_argument("input", help="Path to the Excel workbook to analyze (absolute, relative to CWD, "
-                                  "or relative to pe-sub-jobs/data/import/)")
-    p.add_argument("--facility", "--slug", dest="slug_override", default=None,
-                   help="Override the derived template_slug")
-    p.add_argument("--agent-bank", dest="agent_bank", default=None, help="Override the inferred agent bank name")
-    p.add_argument("--template-class", dest="template_class", choices=TEMPLATE_CLASSES, default=None,
-                   help="Default 'A' if omitted (not structurally inferable)")
-    p.add_argument("--analyze", dest="analyze_only", action="store_true",
-                   help="Print the analysis summary; do not write the template file")
-    p.add_argument("--offline", action="store_true", help="Skip the live Field Mapping Dictionary fetch")
-    p.add_argument("--refresh-dictionary", dest="refresh_dictionary", action="store_true",
-                   help="Force a live dictionary refetch + cache update before analyzing")
-    p.add_argument("--api-url", dest="api_url", default=None,
-                   help=f"pe-sub-api base URL (default $PE_SUB_API_URL or {DEFAULT_API_URL})")
-    p.add_argument("--min-header-matches", dest="min_header_matches", type=int, default=MIN_HEADER_MATCHES_DEFAULT)
-    p.add_argument("--max-rows-per-sheet", dest="max_rows_per_sheet", type=int, default=MAX_ROWS_PER_SHEET_DEFAULT)
-    p.add_argument("--no-color-scan", dest="color_scan", action="store_false",
-                   help="Skip cell-color/legend + merged-header-span detection; uses the faster "
-                        "read-only, values-only load path for very large workbooks")
-    p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument("input", help="Path to the Excel workbook to analyze")
     return p
 
 
@@ -928,11 +897,6 @@ def _resolve_input(raw: str) -> Path:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    # Console output below deliberately uses em dashes / curly punctuation (matching the rest of this
-    # codebase's Python scripts). Some Windows terminals (notably Git Bash/MSYS mintty) report a
-    # non-UTF-8 console code page to Python and would otherwise mangle it; the actual file writes
-    # already use encoding="utf-8" explicitly and are unaffected either way. Best-effort only — never
-    # fatal if the current stdout/stderr doesn't support reconfigure (e.g. already replaced/piped).
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(encoding="utf-8", errors="replace")
@@ -940,23 +904,15 @@ def main(argv: Optional[list[str]] = None) -> int:
             pass
 
     args = build_arg_parser().parse_args(argv)
-
     input_path = _resolve_input(args.input)
-    api_url = args.api_url or os.environ.get("PE_SUB_API_URL", DEFAULT_API_URL)
 
     print(f"Source: {input_path}")
-    dictionary = load_dictionary(api_url, offline=args.offline, refresh=args.refresh_dictionary, verbose=args.verbose)
+    dictionary = load_dictionary(DEFAULT_API_URL, offline=False, refresh=False, verbose=False)
 
-    analyzer = ExcelAnalyzer(dictionary, min_header_matches=args.min_header_matches,
-                              max_rows_per_sheet=args.max_rows_per_sheet, color_scan=args.color_scan,
-                              verbose=args.verbose)
+    analyzer = ExcelAnalyzer(dictionary)
     try:
-        analysis = analyzer.analyze_workbook(
-            input_path, agent_bank_override=args.agent_bank, slug_override=args.slug_override,
-            template_class_override=args.template_class,
-        )
+        analysis = analyzer.analyze_workbook(input_path)
     except Exception as e:
-        # A malformed workbook must be reported, never a silent skip or a bare traceback.
         raise SystemExit(f"Failed to analyze '{input_path}': {e}") from e
 
     builder = TemplateBuilder(analysis)
@@ -964,15 +920,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     summary = render_summary(analysis, envelope)
     print("\n" + summary)
 
-    if args.analyze_only:
-        print("\n(--analyze: template file not written)")
-        _cleanup_cache()
-        return 0
-
     if not analysis.tabs:
-        print("\nNo LP-grid sheet was recognized in this workbook — nothing to write. Re-run with "
-              "-v to see per-sheet scan detail, or --min-header-matches to loosen the threshold.",
-              file=sys.stderr)
+        print("\nNo LP-grid sheet recognized in this workbook.", file=sys.stderr)
         _cleanup_cache()
         return 1
 
@@ -980,8 +929,6 @@ def main(argv: Optional[list[str]] = None) -> int:
     xlsx_path = WATCHED_TEMPLATES_DIR / f"BB-Template-Import-{slug}.xlsx"
     builder.write_import_workbook(xlsx_path)
     print(f"\nTemplate written: {xlsx_path}")
-    print(f"pe-sub-jobs will pick this up within its scan interval (default 30s) and "
-          f"upsert it via POST /api/bb-templates/import?mode=upsert.")
     _cleanup_cache()
     return 0
 

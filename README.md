@@ -175,25 +175,16 @@ existing templates are replaced, and missing templates are created.
 Use `.partial` or `.tmp` while copying large files, then rename to `.xlsx` when complete. Temporary
 Excel files beginning with `~$` are ignored.
 
-### Authoring a template offline: `scripts/parse_excel_templates.py`
+### Generate a template: `scripts/parse_excel_templates.py`
 
-pe-sub-api also exposes a live, deterministic profiler for a raw Agent BB workbook —
-`POST /api/bb-templates/profile` (`TemplateProfiler`, scored against the DB-backed Field Mapping
-Dictionary) — that proposes header row, columns, tab layout, and LP-category groups for an operator
-to confirm and save. `scripts/parse_excel_templates.py` is a standalone CLI that ports those same
-heuristics to Python, for analyzing a raw investor-list workbook when pe-sub-api/pe-sub-extraction
-aren't reachable (bulk pre-analysis, CI, offline work). It writes a human-reviewable JSON proposal
-(shaped like `BbTemplateRequest`, so it can be pasted straight into a `POST`/`PUT /api/bb-templates`
-body) to `data/bb-template-proposals/`, and — only with `--stage-import` — can also emit a real
-`BB-Template-Import-<slug>.xlsx` directly into this directory for the importer above to pick up.
-Nothing is written to the watched directory unless `--stage-import` is passed. See the script's
-module docstring for the full template format, confidence scoring, and the Field Mapping Dictionary
-fetch/cache/fallback behavior.
+Analyzes a raw Agent BB or investor-list workbook and generates a `BB-Template-Import-<slug>.xlsx`
+meta-workbook ready for pe-sub-jobs to pick up:
 
 ```bash
-python scripts/parse_excel_templates.py data/import/some-agent-bb.xlsx --dry-run
-python scripts/parse_excel_templates.py data/import/some-agent-bb.xlsx --facility aep-viii --agent-bank "JP Morgan" --stage-import
+python scripts/parse_excel_templates.py data/import/some-agent-bb.xlsx
 ```
+
+Output lands in `data/bb-templates/` and is imported automatically within 30 seconds.
 
 ## Logging
 

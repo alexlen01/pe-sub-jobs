@@ -6,13 +6,19 @@ target/
 .mvn/wrapper/maven-wrapper.jar
 spring-boot-devtools.properties
 
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
 # Runtime output
 logs/
 
 # LP DB one-off extract (scripts/lp_db_extract.py). End-user data is NOT committed:
 #   data/import/ - real LP DB Export dropped in for a run (bulky, confidential source)
 #   data/out/    - generated CSVs derived from that real data
-# Tracked (source): data/mock/ (mock seed data), data/reference/ (Config-seeded lists),
-# data/bb-templates/, and the scripts/ directory itself.
+# Tracked (source): data/mock/ (mock seed data), data/reference/ (Config-seeded lists,
+# including the Field Mapping Dictionary cache written there — regenerable, but harmless to
+# track since it just mirrors pe-sub-api's DB), data/bb-templates/, and scripts/ itself.
 data/import/
 data/out/

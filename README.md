@@ -186,6 +186,56 @@ python scripts/parse_excel_templates.py data/import/some-agent-bb.xlsx
 
 Output lands in `data/bb-templates/` and is imported automatically within 30 seconds.
 
+### Batch process Agent BB directory: `scripts/parse_agent_bb_directory.py`
+
+Analyzes multiple Agent BB workbooks organized in a directory hierarchy (one subdirectory per Agent Bank) and generates `BB-Template-Import-*.xlsx` templates for all files at once. Use this to process a batch of Agent Bank Excel files in parallel.
+
+**Input structure:**
+
+```
+data/import/agent-bank-batch/
+├── Wells Fargo/
+│   ├── agent_bb_2026-07-15.xlsx
+│   └── additional_file.xlsx
+├── Citi/
+│   └── bb-2026-07-20.xlsx
+└── ...  (one subdirectory per Agent Bank)
+```
+
+**Usage:**
+
+```bash
+# Linux/macOS
+chmod +x scripts/parse_agent_bb_directory.sh   # once
+./scripts/parse_agent_bb_directory.sh data/import/agent-bank-batch/
+
+# Windows
+powershell -ExecutionPolicy Bypass -File scripts\parse_agent_bb_directory.ps1 data\import\agent-bank-batch\
+
+# Direct Python
+python scripts/parse_agent_bb_directory.py data/import/agent-bank-batch/
+
+# With options
+python scripts/parse_agent_bb_directory.py data/import/agent-bank-batch/ --offline --verbose
+```
+
+**Options:**
+
+- `--offline` — skip live API calls; use cached or bundled field mappings
+- `-v, --verbose` — enable debug logging
+
+**Behavior:**
+
+- Walks all subdirectories; each subdirectory name becomes the Agent Bank name in the generated template
+- Analyzes each `.xlsx` file using the same ExcelAnalyzer as `parse_excel_templates.py`, but in batch
+- Cleans filenames to create template slugs (removes dates like `2026-07-15`, prefixes like `Borrowing Base`)
+  - Examples: `2026-07-23-Agent-BB.xlsx` → `Agent-BB`, `UBS-Borrowing-Base-2026.xlsx` → `UBS`
+- Writes all generated templates to `data/bb-templates/` where `BbTemplateDirectoryImporter` picks them up
+- Logs success/failure per file; continues on errors (D10 posture)
+- Returns exit code 1 if any files failed, 0 if all succeeded
+
+All templates are imported automatically within 30 seconds.
+
 ## Logging
 
 Logs are written to `$LOG_PATH/pe-sub-jobs.log` and rotated daily to `$LOG_PATH/archived/pe-sub-jobs.YYYY-MM-DD.log.gz` (30 days / 2 GB cap). Console output mirrors the file.

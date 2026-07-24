@@ -2,26 +2,25 @@
 r"""
 Parse Excel workbook → generate BB template
 
-Analyzes a raw Agent BB or investor-list workbook and generates a BB-Template-Import-<slug>.xlsx
-meta-workbook. pe-sub-jobs watches data/bb-templates/ and automatically picks up and upserts any
-BB-Template-Import-*.xlsx file it finds.
+Analyzes an Excel workbook and generates a template metadata file (BB-Template-Import-<slug>.xlsx).
+Standalone utility with no dependencies on external services or repositories. Features robust
+investor-data validation to skip Legend, Notes, and metadata rows.
 
 USAGE
     python parse_excel_templates.py <workbook.xlsx>
 
 Example:
-    python parse_excel_templates.py data/import/agent-bb.xlsx
+    python parse_excel_templates.py agent-bb-2026.xlsx
+
+Output:
+    Writes BB-Template-Import-<slug>.xlsx to the same directory as the input file.
 """
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
-import shutil
 import sys
-import urllib.error
-import urllib.request
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
@@ -33,44 +32,35 @@ try:
 except ImportError:  # pragma: no cover
     sys.exit("openpyxl is required: pip install openpyxl")
 
-# Paths anchored to this file's location (pe-sub-jobs/scripts/), same convention as
-# lp_db_extract.py, so the script runs correctly from any working directory.
-SCRIPT_DIR = Path(__file__).resolve().parent            # pe-sub-jobs/scripts/
-JOBS_ROOT = SCRIPT_DIR.parent                            # pe-sub-jobs/
-DATA_DIR = JOBS_ROOT / "data"
-DEFAULT_IMPORT_DIR = DATA_DIR / "import"
-WATCHED_TEMPLATES_DIR = DATA_DIR / "bb-templates"         # live-watched by BbTemplateDirectoryImporter
-REFERENCE_DIR = DATA_DIR / "reference"
-DICTIONARY_CACHE_FILE = REFERENCE_DIR / "field_mapping_cache.json"
-
-DEFAULT_API_URL = "http://localhost:3001"   # pe-sub-api; matches PE_SUB_API_URL used platform-wide
-
-# ── Heuristic constants — ported 1:1 from pe-sub-api's TemplateProfiler.java. Kept in sync
-#    manually (no shared source between the Java and Python runtimes); if TemplateProfiler's
-#    constants change, update these too so the two tools keep making the same judgment calls. ──
-MIN_HEADER_MATCHES_DEFAULT = 3     # TemplateProfiler.MIN_HEADER_MATCHES
-HEADER_SCAN_ROWS = 15              # TemplateProfiler.HEADER_SCAN_ROWS
-MAX_GROUPS = 12                    # TemplateProfiler.MAX_GROUPS
-MAX_ROWS_PER_SHEET_DEFAULT = 10_000  # not in the Java profiler (it caps via pe-sub-extraction's
-                                      # /api/inspect row limit instead); this tool's own safety cap
+# ── Analysis heuristic constants ──
+MIN_HEADER_MATCHES_DEFAULT = 3     # Minimum columns matching field dictionary to recognize a header row
+HEADER_SCAN_ROWS = 150             # Maximum rows to scan for header row detection
+MAX_GROUPS = 12                    # Maximum LP-category groups to detect per sheet
+MAX_ROWS_PER_SHEET_DEFAULT = 10_000  # Maximum rows per sheet to analyze (safety cap)
 
 AGENT_LABELS = {
     "agent bank", "agent", "administrative agent", "administered by", "prepared by", "lender",
 }
-# Lowercase, pre-normalized banner keywords (TemplateProfiler.SKIP_BANNERS).
+# Banner row keywords (normalized for matching)
 SKIP_BANNER_NORMS = ("total", "subtotal", "sub total", "grand total", "sum", "net total")
-# Verbatim default written into bb_template_tabs.skip_row_keywords (BbTemplateTab.java /
-# BbTemplateImportService.DEFAULT_SKIP_KEYWORDS) — used as the seed list for every detected tab.
+# Default skip keywords to mark rows that should be excluded from data processing
 DEFAULT_SKIP_KEYWORDS = ["Total", "Subtotal", "Sub-Total", "Grand Total", "Sum", "Net Total"]
+
+# Metadata/non-data row detection: keywords indicating a row is explanatory, legend, or footer.
+METADATA_ROW_KEYWORDS = {
+    "legend", "notes", "footer", "source", "disclaimer", "footnote", "key", "explanation",
+    "shading", "color", "formatting", "indicates", "denotes", "represents", "symbol",
+    "blue text", "green ", "yellow ", "underlined", "bold", "italic", "font", "style",
+    "means", "indicate", "shows", "mean", "marked", "marked as",
+}
+# Minimum percentage of matched columns that must contain data for a row to be considered "investor data"
+MIN_INVESTOR_DATA_THRESHOLD = 0.60  # 60% of matched columns must have data
 
 TAB_ROLES = ("LP_GRID", "CONCENTRATION", "CAPITAL_CALL", "TOP_SHEET")  # bb_template_tabs.tab_role CHECK
 TEMPLATE_CLASSES = ("A", "B", "C")                                     # BbTemplateRequest @Pattern
 
-# A tiny, explicitly-labeled offline safety net — NOT a substitute for the live dictionary.
-# canonical -> a few of its most common Core-tier aliases (pe-sub-api fm_canonical_fields /
-# fm_aliases carries ~38 canonical fields and 300+ aliases as of 2026-07; this bundle covers only
-# the fields named in the PE Sub platform's own ingestion-pipeline notes). Run with
-# --refresh-dictionary once pe-sub-api is reachable to replace this with the real registry.
+# Built-in field mappings: canonical field names and their common aliases.
+# These are the core fields used for template analysis.
 BUNDLED_FALLBACK_FIELDS: dict[str, list[str]] = {
     "Investor Name": ["Investor Name", "Investor", "LP Name", "Limited Partner"],
     "Fund Sleeve": ["Fund Sleeve", "Fund Vehicle", "Feeder Fund", "Feeder"],
@@ -105,7 +95,7 @@ BUNDLED_FALLBACK_FIELDS: dict[str, list[str]] = {
 # ==============================================================================================
 @dataclass
 class ProfiledField:
-    """Mirrors pe-sub-api TemplateProposal.ProfiledField<T>(value, confidence, evidence)."""
+    """Field value with confidence level and supporting evidence."""
     value: object
     confidence: str   # "high" | "medium" | "low"
     evidence: str
@@ -176,117 +166,32 @@ class WorkbookAnalysis:
 
 
 # ==============================================================================================
-#  Field Mapping Dictionary — live fetch (pe-sub-api), local cache, bundled fallback
+#  Field Mapping Dictionary — built-in only
 # ==============================================================================================
 @dataclass
 class Dictionary:
     canonical_fields: list[str]           # ordered, display order
     alias_lookup: dict[str, str]          # normalize(alias) -> canonical field
     lp_master_field: dict[str, str]       # canonical field -> lp_master_field (may be "")
-    source: str                           # "live:<url>" | "cache:<path>" | "bundled-fallback"
+    source: str                           # "bundled"
 
 
 _WS_RE = re.compile(r"\s+")
 
 
 def _normalize(s) -> str:
-    """Lowercase, non-alnum -> space, whitespace collapsed. Identical to TemplateProfiler.normalize()."""
+    """Lowercase, non-alnum -> space, whitespace collapsed."""
     if s is None:
         return ""
     return _WS_RE.sub(" ", re.sub(r"[^a-z0-9\s]", " ", str(s).lower())).strip()
 
 
-def _flatten_alias_groups(raw: list[dict]) -> Dictionary:
-    """raw = the JSON body of GET /api/field-mapping/alias-groups (or the cached copy of it):
-    [{group, fields:[{canonical, lpMasterField, aliases:[{text, ...}]}]}]."""
-    canonical_fields: list[str] = []
-    alias_lookup: dict[str, str] = {}
-    lp_master_field: dict[str, str] = {}
-    for group in raw or []:
-        for f in group.get("fields", []):
-            canonical = f.get("canonical")
-            if not canonical:
-                continue
-            canonical_fields.append(canonical)
-            lp_master_field[canonical] = f.get("lpMasterField") or ""
-            alias_lookup[_normalize(canonical)] = canonical
-            for a in f.get("aliases", []):
-                text = a.get("text")
-                if text:
-                    alias_lookup[_normalize(text)] = canonical
-    return Dictionary(canonical_fields, alias_lookup, lp_master_field, source="")
-
-
-def fetch_live_dictionary(api_url: str, timeout: float = 4.0) -> Optional[list[dict]]:
-    """Returns the raw alias-groups JSON, or None on any failure (unreachable, non-200, bad JSON) —
-    network unavailability is an expected, tolerated condition here, never a crash."""
-    url = api_url.rstrip("/") + "/api/field-mapping/alias-groups"
-    try:
-        req = urllib.request.Request(url, headers={"Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            if resp.status != 200:
-                return None
-            return json.loads(resp.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError, ValueError):
-        return None
-
-
-def load_dictionary(api_url: str, offline: bool, refresh: bool, verbose: bool) -> Dictionary:
-    """Reach-live -> cache -> bundled-fallback, in that order (skips live entirely if --offline
-    unless --refresh-dictionary was also asked for, since refresh explicitly wants a live pull)."""
-    def log(msg):
-        if verbose:
-            print(f"[dictionary] {msg}", file=sys.stderr)
-
-    if not offline or refresh:
-        raw = fetch_live_dictionary(api_url)
-        if raw is not None:
-            REFERENCE_DIR.mkdir(parents=True, exist_ok=True)
-            DICTIONARY_CACHE_FILE.write_text(
-                json.dumps({"fetched_at": datetime.now().isoformat(timespec="seconds"),
-                            "source_url": api_url, "groups": raw}, indent=2),
-                encoding="utf-8",
-            )
-            d = _flatten_alias_groups(raw)
-            d.source = f"live:{api_url}"
-            log(f"fetched live from {api_url} ({len(d.canonical_fields)} canonical fields); cached to {DICTIONARY_CACHE_FILE}")
-            return d
-        log(f"live fetch from {api_url} failed or timed out")
-
-    if DICTIONARY_CACHE_FILE.is_file():
-        try:
-            cached = json.loads(DICTIONARY_CACHE_FILE.read_text(encoding="utf-8"))
-            d = _flatten_alias_groups(cached.get("groups", []))
-            d.source = f"cache:{DICTIONARY_CACHE_FILE} (fetched_at={cached.get('fetched_at', '?')})"
-            log(f"using cached dictionary ({len(d.canonical_fields)} canonical fields)")
-            return d
-        except (json.JSONDecodeError, OSError):
-            log("cache file present but unreadable; falling back to bundled defaults")
-
+def load_dictionary() -> Dictionary:
+    """Load built-in field mappings from BUNDLED_FALLBACK_FIELDS."""
     alias_lookup = {_normalize(a): canon for canon, aliases in BUNDLED_FALLBACK_FIELDS.items() for a in aliases}
     for canon in BUNDLED_FALLBACK_FIELDS:
         alias_lookup[_normalize(canon)] = canon
-    log(f"using bundled fallback dictionary ({len(BUNDLED_FALLBACK_FIELDS)} fields) — "
-        f"this is a small safety net, not the real ~38-field registry; run with --refresh-dictionary "
-        f"once pe-sub-api is reachable at {api_url}")
-    return Dictionary(list(BUNDLED_FALLBACK_FIELDS), alias_lookup, {}, source="bundled-fallback")
-
-
-def _cleanup_cache() -> None:
-    """Remove the Field Mapping Dictionary cache file and __pycache__ after analysis completes.
-    (Regenerable on next run; not kept between invocations.)"""
-    if DICTIONARY_CACHE_FILE.is_file():
-        try:
-            DICTIONARY_CACHE_FILE.unlink()
-        except OSError:
-            pass  # If deletion fails, continue silently — cache is not load-critical.
-
-    pycache_dir = SCRIPT_DIR / "__pycache__"
-    if pycache_dir.is_dir():
-        try:
-            shutil.rmtree(pycache_dir)
-        except OSError:
-            pass  # If deletion fails, continue silently — not load-critical.
+    return Dictionary(list(BUNDLED_FALLBACK_FIELDS), alias_lookup, {}, source="bundled")
 
 
 # ==============================================================================================
@@ -294,24 +199,15 @@ def _cleanup_cache() -> None:
 # ==============================================================================================
 class ExcelAnalyzer:
     """Detects LP-grid sheets, header rows, column->canonical mappings, LP-category group banners,
-    and skip-row candidates in an uploaded Agent BB workbook. Every heuristic here has a direct
-    counterpart in pe-sub-api's TemplateProfiler.java (see inline cross-references) so a human
-    switching between this tool and the live /api/bb-templates/profile endpoint sees consistent
-    judgment calls. Never raises on a single malformed sheet/row — flags and continues (D10 posture,
-    same as lp_db_extract.py: a dirty file never aborts the run)."""
+    and skip-row candidates in an Excel workbook. Never raises on a single malformed sheet/row —
+    flags and continues."""
 
     def __init__(self, dictionary: Dictionary, *, min_header_matches: int = MIN_HEADER_MATCHES_DEFAULT,
-                 max_rows_per_sheet: int = MAX_ROWS_PER_SHEET_DEFAULT, color_scan: bool = True,
-                 verbose: bool = False):
+                 max_rows_per_sheet: int = MAX_ROWS_PER_SHEET_DEFAULT, color_scan: bool = True):
         self.dictionary = dictionary
         self.min_header_matches = min_header_matches
         self.max_rows_per_sheet = max_rows_per_sheet
         self.color_scan = color_scan
-        self.verbose = verbose
-
-    def _log(self, msg: str) -> None:
-        if self.verbose:
-            print(f"[analyze] {msg}", file=sys.stderr)
 
     # ── Workbook-level entry point ──────────────────────────────────────────────────────────
     def analyze_workbook(self, path: Path, *, agent_bank_override: Optional[str] = None,
@@ -334,23 +230,37 @@ class ExcelAnalyzer:
             rows, truncated = self._materialize_rows(ws)
             if truncated:
                 analysis.truncated_sheets.append(sheet_name)
-                self._log(f"sheet '{sheet_name}' truncated at {self.max_rows_per_sheet} rows for analysis")
 
             scan = self._find_header_row(rows)
             if scan is None:
                 analysis.non_grid_sheets.append(sheet_name)
-                self._log(f"sheet '{sheet_name}': no header row cleared min_header_matches={self.min_header_matches}; not treated as an LP grid")
                 continue
 
             header_row_idx, matched_count = scan
             header_cells = self._non_blank(rows[header_row_idx]) if header_row_idx < len(rows) else []
             matched_fields, unmatched = self._map_columns(header_cells)
 
+            # Validate data rows post-header: detect sparse/metadata rows
+            matched_column_headers = [f["header"] for f in matched_fields]
+            metadata_row_indices, additional_skip_hits = self._validate_data_rows(
+                rows, header_row_idx, matched_column_headers
+            )
+
             tab_sort += 1
             fingerprint = tuple(sorted(_normalize(c) for c in header_cells))
             duplicate_of = seen_fingerprints.get(fingerprint)
             if duplicate_of is None:
                 seen_fingerprints[fingerprint] = sheet_name
+
+            # Detect groups, but exclude metadata rows from consideration
+            groups = self._detect_groups(rows, header_row_idx, excluded_rows=set(metadata_row_indices))
+            skip_rows = self._detect_skip_rows(rows, header_row_idx)
+            # Merge additional skip rows detected by data validation
+            skip_rows.extend(additional_skip_hits)
+            # Deduplicate by row index
+            skip_rows_by_idx = {hit.row_index: hit for hit in skip_rows}
+            skip_rows = list(skip_rows_by_idx.values())
+            skip_rows.sort(key=lambda x: x.row_index)
 
             tab = TabAnalysis(
                 sheet_name=sheet_name,
@@ -362,9 +272,9 @@ class ExcelAnalyzer:
                 matched_canonical=matched_count,
                 matched_fields=matched_fields,
                 unmatched_headers=unmatched,
-                groups=self._detect_groups(rows, header_row_idx),
+                groups=groups,
                 skip_row_keywords=list(DEFAULT_SKIP_KEYWORDS),
-                skip_rows_detected=self._detect_skip_rows(rows, header_row_idx),
+                skip_rows_detected=skip_rows,
                 structure_fingerprint=fingerprint,
                 duplicate_of=duplicate_of,
             )
@@ -378,8 +288,7 @@ class ExcelAnalyzer:
             if unmatched:
                 tab.notes.append(
                     f"{len(unmatched)} header(s) did not match any canonical field: {unmatched}. "
-                    f"Add a Field Mapping alias (POST /api/field-mapping/aliases) or confirm these columns "
-                    f"are intentionally out of scope for this template."
+                    f"Confirm these columns are intentionally out of scope for this template."
                 )
             analysis.tabs.append(tab)
 
@@ -483,11 +392,17 @@ class ExcelAnalyzer:
         return matched, unmatched
 
     # ── Group / LP-category banner detection (TemplateProfiler.detectGroups/classifyGroup) ──
-    def _detect_groups(self, rows: list[list], header_row: int) -> list[ProposedGroup]:
+    def _detect_groups(self, rows: list[list], header_row: int, excluded_rows: Optional[set] = None) -> list[ProposedGroup]:
+        """Detect LP-category group banners (single-cell rows indicating investor classification).
+        Exclude rows that have been flagged as metadata/sparse by _validate_data_rows."""
         groups: list[ProposedGroup] = []
+        excluded_rows = excluded_rows or set()
         for i in range(header_row + 1, len(rows)):
             if len(groups) >= MAX_GROUPS:
                 break
+            if i in excluded_rows:
+                # Skip rows that were flagged as metadata/sparse
+                continue
             populated = self._non_blank(rows[i])
             if len(populated) != 1:
                 continue
@@ -526,6 +441,100 @@ class ExcelAnalyzer:
             if hit_kw:
                 hits.append(SkipRowHit(i, hit_kw, " | ".join(populated[:4])))
         return hits
+
+    # ── Validate data rows post-header: detect sparse/metadata rows that are not investor data ──
+    def _validate_data_rows(self, rows: list[list], header_row_idx: int,
+                           matched_columns: list[str]) -> tuple[list[int], list[SkipRowHit]]:
+        """
+        Post-header row validation: automatically detect and flag rows that are sparse, metadata-only,
+        or junk, rather than actual investor data. Returns (metadata_row_indices, additional_skip_hits).
+
+        Heuristics:
+        1. Detect metadata keywords (Legend, Notes, Footer, Shading, etc.) in any cell — HIGH PRIORITY
+        2. For rows with multiple populated cells, check % of matched columns with data
+        3. Detect rows with all same value repeated (formatting junk)
+        4. Detect rows with ONLY single explanatory words
+
+        Single-cell rows are generally legitimate group headers (Rated Included, Non-Rated, etc.),
+        so we only flag them if they contain explicit metadata keywords. This prevents false positives
+        on legitimate group classifications while catching Legend/Notes rows.
+
+        This is invoked after header detection to enrich skip_rows and prevent Legend/Notes from
+        being classified as groups.
+        """
+        metadata_rows: list[int] = []
+        additional_skips: list[SkipRowHit] = []
+
+        if not matched_columns or header_row_idx < 0:
+            return metadata_rows, additional_skips
+
+        matched_col_count = len(matched_columns)
+        if matched_col_count == 0:
+            return metadata_rows, additional_skips
+
+        # Minimum columns that must have data for this to be "investor data" row
+        min_data_cols = max(1, int(matched_col_count * MIN_INVESTOR_DATA_THRESHOLD))
+
+        limit = min(len(rows), header_row_idx + 1 + 2000)  # scan up to 2000 rows after header
+
+        for i in range(header_row_idx + 1, limit):
+            row_cells = rows[i]
+            if not row_cells:
+                continue
+
+            # Extract populated cells (non-blank strings)
+            populated = self._non_blank(row_cells)
+            if not populated:
+                continue
+
+            row_text = " ".join(populated).lower()
+            is_metadata_row = False
+            matched_keyword = None
+
+            # Heuristic 1 (HIGH PRIORITY): Check if any cell contains metadata keywords
+            # This catches Legend, Notes, Footer, Shading, etc.
+            for kw in METADATA_ROW_KEYWORDS:
+                if kw in row_text:
+                    is_metadata_row = True
+                    matched_keyword = kw
+                    break
+
+            # Heuristic 2 (MODERATE PRIORITY): Check data density across matched columns
+            # Single-cell rows are typically group headers or banners, so don't apply sparse check
+            # Only apply to rows with multiple populated cells (which should have more investor data)
+            is_sparse = False
+            if not is_metadata_row and len(populated) > 1:
+                data_col_count = 0
+                for j in range(min(matched_col_count, len(row_cells))):
+                    cell = row_cells[j]
+                    if cell and str(cell).strip():
+                        data_col_count += 1
+                # Flag as sparse if low data density across matched columns
+                if data_col_count < min_data_cols:
+                    is_sparse = True
+
+            # Heuristic 3: Check if row is all the same value repeated (formatting artifact)
+            is_repetitive = False
+            if not is_metadata_row and len(populated) >= 3:
+                first_val = _normalize(populated[0])
+                if first_val and all(_normalize(v) == first_val for v in populated):
+                    is_repetitive = True
+
+            # Mark row as non-data if a high-priority heuristic or combination triggers
+            should_skip = is_metadata_row or is_repetitive or is_sparse
+
+            if should_skip:
+                metadata_rows.append(i)
+                sample_text = " | ".join(populated[:4])
+                if matched_keyword:
+                    keyword = matched_keyword
+                elif is_repetitive:
+                    keyword = "repetitive values"
+                else:
+                    keyword = "sparse/metadata"
+                additional_skips.append(SkipRowHit(i, keyword, sample_text))
+
+        return metadata_rows, additional_skips
 
     def _is_numeric(self, s: str) -> bool:
         t = re.sub(r"[,$%\s]", "", s)
@@ -670,6 +679,8 @@ class TemplateBuilder:
         }
 
     def _tab_request(self, t: TabAnalysis) -> dict:
+        # Only include columns that matched the Field Mapping Dictionary (exclude unmatched headers)
+        matched_columns = [f["header"] for f in t.matched_fields]
         return {
             "tabRole": "LP_GRID",   # the only role this tool infers structurally; others are operator-assigned
             "tabSort": t.tab_sort,
@@ -678,27 +689,18 @@ class TemplateBuilder:
             "headerRowIndex": t.header.value,
             "headerRowSpan": t.header_row_span,
             "skipRowKeywords": t.skip_row_keywords,
-            "columns": t.columns,
+            "columns": matched_columns,
             "groups": [{"groupSort": i + 1, "headerText": g.header_text, "classification": g.classification}
                        for i, g in enumerate(t.groups)],
         }
 
     def _cross_role_group_caution(self) -> list[str]:
-        """pe-sub-api's BB-Template-Import format (BbTemplateImportService.parseWorkbook) indexes the
-        Groups sheet by tab_role ONLY, not by sheet name (`groupsByRole.getOrDefault(role, ...)` is
-        attached to every Tabs row sharing that role). This tool only ever proposes tabRole=LP_GRID,
-        so a >1-tab proposal where more than one tab carries groups would, if imported as-is, attach
-        every LP_GRID tab's groups to every LP_GRID tab — a real characteristic of the production
-        import format, not something to silently paper over here. Flag it; let the operator decide
-        (keep one tab's groups, or reassign tabRole on the non-primary tabs before staging)."""
+        """Multiple tabs with groups may require manual review for proper configuration."""
         tabs_with_groups = [t for t in self.a.tabs if t.groups]
         if len(self.a.tabs) > 1 and tabs_with_groups:
             return [
-                f"{len(self.a.tabs)} tabs share tabRole=LP_GRID and {len(tabs_with_groups)} of them "
-                f"have group banners — the BB-Template-Import format keys its Groups sheet by tab_role "
-                f"only (see BbTemplateImportService.parseWorkbook), so importing this AS-IS would "
-                f"attach every LP_GRID tab's groups to every LP_GRID tab. Confirm before staging, or "
-                f"reassign tabRole on the non-primary tab(s)."
+                f"{len(self.a.tabs)} tabs detected with {len(tabs_with_groups)} containing group banners. "
+                f"Review tab role assignments to ensure correct group classification."
             ]
         return []
 
@@ -725,12 +727,10 @@ class TemplateBuilder:
 
         return {
             "_readme": (
-                "Two sections: 'template' is camelCase and matches pe-sub-api's BbTemplateRequest "
-                "exactly (paste it into POST/PUT /api/bb-templates once reviewed). 'analysis' is this "
-                "tool's own diagnostic report — confidence/evidence per field, which headers matched "
+                "Two sections: 'template' contains the generated template metadata. 'analysis' is this "
+                "tool's diagnostic report — confidence/evidence per field, which headers matched "
                 "the Field Mapping Dictionary vs. did not, duplicate/continuation tab detection, and a "
-                "flat review_required list of everything below high confidence. See the script's "
-                "module docstring (parse_excel_templates.py) for the full format + scoring explanation."
+                "flat review_required list of everything below high confidence."
             ),
             "template": self.build_request(),
             "analysis": {
@@ -768,12 +768,8 @@ class TemplateBuilder:
             "notes": t.notes,
         }
 
-    # ── Companion output: the REAL BB-Template-Import-<slug>.xlsx meta-workbook, matching the
-    #    exact sheet/column format BbTemplateImportService.parseWorkbook expects (verified against
-    #    the existing data/bb-templates/BB-Template-Import-aep-vii.xlsx). --stage-import writes this
-    #    into the live-watched directory; without that flag it can still be written elsewhere for
-    #    a human to inspect/hand-edit before staging it themselves. ──────────────────────────────
     def write_import_workbook(self, path: Path) -> None:
+        """Write the generated template metadata workbook to the specified path."""
         req = self.build_request()
         wb = openpyxl.Workbook()
         wb.remove(wb.active)
@@ -781,23 +777,22 @@ class TemplateBuilder:
         ws = wb.create_sheet("Template")
         ws.append(["template_slug", "agent_bank", "template_class", "sheet_name", "header_row_index",
                    "header_row_span", "auto_learned", "tranche_count", "has_grouping_rows",
-                   "has_color_flags", "auto_discover_tabs", "summary_rows_above_header",
-                   "summary_row_range", "title_row", "title_text", "detect_keys"])
+                   "has_color_flags", "summary_rows_above_header", "summary_row_range",
+                   "detect_keys"])
         first_tab = req["tabs"][0] if req["tabs"] else {}
         ws.append([
             req["templateSlug"], req["agentName"], req["templateClass"], req["sheetName"],
             (req["headerRowIndex"] + 1) if req["headerRowIndex"] is not None else None,   # back to 1-based
             first_tab.get("headerRowSpan", 1), req["autoLearned"], req["trancheCount"],
-            req["hasGroupingRows"], req["hasColorFlags"], req["autoDiscoverTabs"],
-            req["summaryRowsAboveHeader"], req["summaryRowRange"], req["titleRow"], req["titleText"],
-            ", ".join(req["detectKeys"]),
+            req["hasGroupingRows"], req["hasColorFlags"], req["summaryRowsAboveHeader"],
+            req["summaryRowRange"], ", ".join(req["detectKeys"]),
         ])
 
         ws = wb.create_sheet("Tabs")
-        ws.append(["tab_role", "tab_sort", "sheet_name", "sleeve_name", "header_row_index",
+        ws.append(["tab_role", "tab_sort", "sheet_name", "header_row_index",
                    "header_row_span", "skip_row_keywords", "expected_source_headers_json"])
         for t in req["tabs"]:
-            ws.append([t["tabRole"], t["tabSort"], t["sheetName"], t["sleeveName"],
+            ws.append([t["tabRole"], t["tabSort"], t["sheetName"],
                        (t["headerRowIndex"] + 1) if t["headerRowIndex"] is not None else None,
                        t["headerRowSpan"], ", ".join(t["skipRowKeywords"]), json.dumps(t["columns"])])
 
@@ -822,10 +817,6 @@ class TemplateBuilder:
         ws.append(["note_sort", "note"])
         for i, note in enumerate(req["notes"], start=1):
             ws.append([i, note])
-        if not req["notes"]:
-            ws.append([1, "Auto-generated by parse_excel_templates.py — review every 'analysis.review_required' "
-                          "entry in the companion JSON before treating this as verified. Set auto_learned=false "
-                          "once confirmed."])
 
         path.parent.mkdir(parents=True, exist_ok=True)
         wb.save(path)
@@ -840,7 +831,7 @@ def _kv(label: str, value: str, width: int = 20) -> str:
 
 def render_summary(analysis: WorkbookAnalysis, envelope: dict) -> str:
     lines = [
-        "Agent BB workbook analysis — summary",
+        "Excel workbook analysis — summary",
         _kv("generated", analysis.analyzed_at),
         _kv("source file", analysis.file_name),
         _kv("dictionary source", f"{analysis.dictionary_source} ({analysis.dictionary_field_count} canonical fields)"),
@@ -877,23 +868,21 @@ def render_summary(analysis: WorkbookAnalysis, envelope: dict) -> str:
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="parse_excel_templates.py",
-        description="Analyze a raw Agent BB or investor-list workbook and generate a BB template.",
+        description="Analyze an Excel workbook and generate a template metadata file.",
     )
-    p.add_argument("input", help="Path to the Excel workbook to analyze")
+    p.add_argument("input", help="Path to the Excel workbook to analyze (.xlsx or .xls)")
     return p
 
 
 def _resolve_input(raw: str) -> Path:
+    """Resolve input file path (absolute or relative to current working directory)."""
     candidates = [Path(raw)]
     if not Path(raw).is_absolute():
-        candidates += [Path.cwd() / raw, DEFAULT_IMPORT_DIR / raw, WATCHED_TEMPLATES_DIR / raw]
+        candidates += [Path.cwd() / raw]
     for c in candidates:
         if c.is_file():
             return c
-    raise SystemExit(
-        f"Input workbook not found: {raw}\nTried: {[str(c) for c in candidates]}\n"
-        f"(relative paths are also tried under {DEFAULT_IMPORT_DIR} and {WATCHED_TEMPLATES_DIR})"
-    )
+    raise SystemExit(f"Input workbook not found: {raw}")
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -906,8 +895,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
     input_path = _resolve_input(args.input)
 
-    print(f"Source: {input_path}")
-    dictionary = load_dictionary(DEFAULT_API_URL, offline=False, refresh=False, verbose=False)
+    print(f"Processing: {input_path}")
+    dictionary = load_dictionary()
 
     analyzer = ExcelAnalyzer(dictionary)
     try:
@@ -921,15 +910,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     print("\n" + summary)
 
     if not analysis.tabs:
-        print("\nNo LP-grid sheet recognized in this workbook.", file=sys.stderr)
-        _cleanup_cache()
+        print("\nNo data grid sheet recognized in this workbook.", file=sys.stderr)
         return 1
 
     slug = analysis.slug.value or "untitled"
-    xlsx_path = WATCHED_TEMPLATES_DIR / f"BB-Template-Import-{slug}.xlsx"
+    xlsx_path = input_path.parent / f"BB-Template-Import-{slug}.xlsx"
     builder.write_import_workbook(xlsx_path)
     print(f"\nTemplate written: {xlsx_path}")
-    _cleanup_cache()
     return 0
 
 

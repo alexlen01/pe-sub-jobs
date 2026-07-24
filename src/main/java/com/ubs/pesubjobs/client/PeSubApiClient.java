@@ -6,6 +6,7 @@ import com.ubs.pesubjobs.model.ProcessedFacility;
 import com.ubs.pesubjobs.model.ProcessedLpMaster;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -83,6 +84,45 @@ public class PeSubApiClient {
         } catch (Exception e) {
             log.debug("pe-sub-api readiness check failed: {}", e.getMessage());
             return false;
+        }
+    }
+
+    public long getFacilityCount() {
+        try {
+            Map<String, Long> response = rest.get()
+                    .uri("/api/facilities/count")
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<Map<String, Long>>() {});
+            return response != null ? response.getOrDefault("count", 0L) : 0L;
+        } catch (Exception e) {
+            log.debug("Failed to query facility count: {}", e.getMessage());
+            return 0L;
+        }
+    }
+
+    public long getLpMasterCount() {
+        try {
+            Map<String, Long> response = rest.get()
+                    .uri("/api/lp-master/count")
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<Map<String, Long>>() {});
+            return response != null ? response.getOrDefault("count", 0L) : 0L;
+        } catch (Exception e) {
+            log.debug("Failed to query LP Master count: {}", e.getMessage());
+            return 0L;
+        }
+    }
+
+    public long getLpRecordCount() {
+        try {
+            Map<String, Long> response = rest.get()
+                    .uri("/api/lpRecords/count")
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<Map<String, Long>>() {});
+            return response != null ? response.getOrDefault("count", 0L) : 0L;
+        } catch (Exception e) {
+            log.debug("Failed to query LP Record count: {}", e.getMessage());
+            return 0L;
         }
     }
 

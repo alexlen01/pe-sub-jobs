@@ -57,6 +57,12 @@ public class JobStartupRunner implements ApplicationRunner {
                     ingestProperties.schemaWaitTimeout());
             return;
         }
+
+        if (dataAlreadyPopulated()) {
+            log.info("Database already populated with seed data - skipping startup ingest");
+            return;
+        }
+
         runJob("facility-ingest", facilityIngestJob, ingestProperties.facilityFile());
         runJob("lp-master-ingest", lpMasterIngestJob, ingestProperties.lpMasterFile());
         runJob("lp-records-seed", lpRecordsSeedJob, ingestProperties.lpFacilitySeedsFile());
@@ -91,6 +97,19 @@ public class JobStartupRunner implements ApplicationRunner {
                 return false;
             }
         }
+    }
+
+    private boolean dataAlreadyPopulated() {
+        long facilityCount = apiClient.getFacilityCount();
+        long lpMasterCount = apiClient.getLpMasterCount();
+        long lpRecordCount = apiClient.getLpRecordCount();
+
+        boolean hasData = facilityCount > 0 || lpMasterCount > 0 || lpRecordCount > 0;
+        if (hasData) {
+            log.info("Data existence check: facilities={} lpMaster={} lpRecords={}",
+                    facilityCount, lpMasterCount, lpRecordCount);
+        }
+        return hasData;
     }
 
     private void runJob(String name, Job job, String filePath) {

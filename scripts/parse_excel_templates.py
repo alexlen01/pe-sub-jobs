@@ -37,6 +37,8 @@ MIN_HEADER_MATCHES_DEFAULT = 3     # Minimum columns matching field dictionary t
 HEADER_SCAN_ROWS = 150             # Maximum rows to scan for header row detection
 MAX_GROUPS = 12                    # Maximum LP-category groups to detect per sheet
 MAX_ROWS_PER_SHEET_DEFAULT = 10_000  # Maximum rows per sheet to analyze (safety cap)
+MIN_DATA_ROWS_AFTER_HEADER = 2     # Minimum data rows with 60% density required to confirm a sheet is a grid
+DATA_ROW_SCAN_LIMIT = 30           # Rows to scan after header for data validation
 
 AGENT_LABELS = {
     "agent bank", "agent", "administrative agent", "administered by", "prepared by", "lender",
@@ -240,8 +242,13 @@ class ExcelAnalyzer:
             header_cells = self._non_blank(rows[header_row_idx]) if header_row_idx < len(rows) else []
             matched_fields, unmatched = self._map_columns(header_cells)
 
-            # Validate data rows post-header: detect sparse/metadata rows
+            # Validate that sheet has actual investor data rows, not just a header match
             matched_column_headers = [f["header"] for f in matched_fields]
+            if not self._has_valid_data_rows(rows, header_row_idx, matched_column_headers):
+                analysis.non_grid_sheets.append(sheet_name)
+                continue
+
+            # Validate data rows post-header: detect sparse/metadata rows
             metadata_row_indices, additional_skip_hits = self._validate_data_rows(
                 rows, header_row_idx, matched_column_headers
             )
@@ -358,6 +365,46 @@ class ExcelAnalyzer:
             if matched > best_matched:
                 best_matched, best_row = matched, i
         return (best_row, best_matched) if best_matched >= self.min_header_matches else None
+
+    def _has_valid_data_rows(self, rows: list[list], header_row_idx: int,
+                            matched_columns: list[str], min_data_rows: int = MIN_DATA_ROWS_AFTER_HEADER) -> bool:
+        """Check if sheet has at least min_data_rows with 60%+ data density in matched columns.
+        This ensures a sheet is a real investor grid, not just a summary/reference sheet
+        with incidental header matches."""
+        if not matched_columns or header_row_idx < 0:
+            return False
+
+        matched_col_count = len(matched_columns)
+        min_data_cols = max(1, int(matched_col_count * MIN_INVESTOR_DATA_THRESHOLD))
+
+        valid_data_rows = 0
+        limit = min(len(rows), header_row_idx + 1 + DATA_ROW_SCAN_LIMIT)
+
+        for i in range(header_row_idx + 1, limit):
+            row_cells = rows[i]
+            if not row_cells:
+                continue
+
+            # Skip rows flagged as metadata
+            populated = self._non_blank(row_cells)
+            if not populated:
+                continue
+
+            row_text = " ".join(populated).lower()
+            is_metadata = any(kw in row_text for kw in METADATA_ROW_KEYWORDS)
+            if is_metadata:
+                continue
+
+            # Count data in matched columns only
+            data_col_count = sum(1 for j in range(min(matched_col_count, len(row_cells)))
+                               if row_cells[j] and str(row_cells[j]).strip())
+
+            if data_col_count >= min_data_cols:
+                valid_data_rows += 1
+                if valid_data_rows >= min_data_rows:
+                    return True
+
+        return False
 
     def _matches_alias(self, norm_cell: str) -> bool:
         if not norm_cell:

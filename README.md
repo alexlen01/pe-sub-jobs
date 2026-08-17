@@ -1,6 +1,6 @@
 # pe-sub-jobs
 
-Spring Boot 4.1 / Java 25 / Spring Batch 6 data ingestion service for the PE Sub Borrowing Base Platform. Reads flat-file CSV exports and posts them to `pe-sub-api`'s SERVICE-gated bulk endpoints. Runs at **`http://localhost:3003`**.
+Spring Boot 4.1 / Java 21 / Spring Batch 6 data ingestion service for the PE Sub Borrowing Base Platform. Reads flat-file CSV exports and posts them to `pe-sub-api`'s SERVICE-gated bulk endpoints. Runs at **`http://localhost:3003`**.
 
 **DB-less by design:** this service holds no database connection and issues no SQL. `pe-sub-api`
 owns the schema; every feed writes through its REST endpoints (`POST /api/facilities/ingest`,
@@ -12,7 +12,7 @@ persisted and restart-from-failure is unsupported; every feed is an idempotent f
 
 ## Stack
 
-- Java 25, Spring Boot 4.1.0, Maven 3.9
+- Java 21, Spring Boot 4.1.0, Maven 3.9
 - Spring Batch 6 — chunk-oriented processing, fault-tolerant skip policy, `ResourcelessJobRepository`
 - `RestClient` (`PeSubApiClient`) — one POST per 50-row chunk to `pe-sub-api`; no JDBC, no JPA
 - Logback — daily rolling log to `pe-sub-jobs.log`, gzip-archived, 30-day retention
@@ -110,7 +110,7 @@ Development seed files are in `data/mock/`:
 
 `lp_facility_seeds.csv` links LP Master records to specific facilities, producing `lp_records` rows the same way the ingestion wizard would. Since the D2 revision (see `pe-sub-docs/LP_DB_EXTRACT_DESIGN.md`) each seed row carries the **full per-LP column set** of the LP DB Export (31 columns: the legacy 7 first, then parent, spv, high_qty, investor_type, inst_vs_hnw, region_location, investment_grade, ubs_cls, sp, mdy, fitch, aum, nav, pension, pension_funded, pct_cap_commit, called_cap, pct_uncalled, pct_called, ubs_conc, ubs_rate, agent_bb, ubs_bb, notes) — `ubs_cls` is derived per row from that row's attributes (ratings, pension assets, NAV, AUM, HNW/SPV flags) via the Borrowing Base Criteria Matrix (`data/reference/bb_criteria_matrix.csv`, transcribed from `pe-sub-docs/BB_CRITERIA_DESIGN.md`), and the row's UBSAR/AgentAR advance rates are slotted into the discrete 90/75/65/50/0 rate groups by the Floor Map (`data/reference/rate_floor_map.csv`). Row values win server-side; the LP Master profile only fills blanks, and a legacy 7-column file still parses (the reader is non-strict and pads blanks). The API inserts a row only when that (facility, investor) pair has none yet — `lp_records` intentionally has **no** unique constraint on the pair (multi-sleeve) — so re-running is a safe no-op that never overwrites records committed through the Shadow BB flow. The startup defaults point at the extract output in `data/out/` (see `ingest.*` properties below).
 
-The extract's input is the simulated, date-stamped LP DB Export produced by `scripts/lp_db_generate.py` into `data/import/`. The generator's built-in **chaos monkey** (`CHAOS_ENABLED`/`CHAOS_SEED` tunables; see `pe-sub-docs/"AI Chaos Monkey for Data Quality.md"`) degrades the values written to the XLSX to realistic manual-entry quality — name drift, `A minus` ratings, unit mix-ups, NAV range strings, categorical drift — while leaving cash/identity columns pristine, and logs every mutation to `data/import/<export name>.chaos_log.csv` as ground truth. `lp_db_extract.py` reads whatever file it is given **as-is** (no cleaning toggle), the same posture it needs for a real export; its unmatched/variance reports plus the chaos log show what the normalizers absorbed.
+The extract's input is the simulated, date-stamped LP DB Export produced by `scripts/lp_db_generate.py` into `data/import/`. The generator's built-in **chaos monkey** (`CHAOS_ENABLED`/`CHAOS_SEED` tunables; see `pe-sub-docs/"AI Chaos Monkey for Data Quality.md"`) degrades the values written to the XLSX to realistic manual-entry quality — name drift, `A minus` ratings, unit mix-ups, NAV range strings, categorical drift — while leaving cash/identity columns pristine, and summarizes every mutation (count per column and per pattern) on the console — the export XLSX is the only file it writes, and re-running with the same `CHAOS_SEED` reproduces the identical degradation. `lp_db_extract.py` reads whatever file it is given **as-is** (no cleaning toggle), the same posture it needs for a real export; it writes **only** the three ingestion CSVs into `data/out/` (`lp_master.csv`, `lp_facility_seeds.csv`, `facilities.csv`) and prints its unmatched/variance counts — including each unmatched Investor Type / Agent LP Category with a fuzzy suggestion — to the console instead of report files.
 
 ## Getting started
 
@@ -160,7 +160,7 @@ POST /jobs/cls-conc-limits-ingest?filePath=<absolute-or-relative-path>
 | `INGEST_SCHEMA_WAIT_TIMEOUT` | `30s` | How long startup ingest waits for pe-sub-api to answer `/api/ping` |
 | `INGEST_SCHEMA_WAIT_INTERVAL` | `2s` | Poll interval while waiting for pe-sub-api |
 | `BB_TEMPLATE_IMPORT_ENABLED` | `true` | Import BB template workbooks from the watched directory |
-| `BB_TEMPLATE_IMPORT_DIR` | `data/bb-templates` | Directory scanned for `BB-Template-Import-*.xlsx` workbooks |
+| `BB_TEMPLATE_IMPORT_DIR` | `data/bb-templates` | Directory scanned for BB template `*.xlsx` workbooks |
 | `PE_SUB_API_URL` | `http://localhost:3001` (local profile) | `pe-sub-api` base URL — target of every feed (ingest/seed endpoints) and template upserts |
 | `BB_TEMPLATE_SCAN_INTERVAL` | `30s` | How often to rescan the template directory while running |
 | `BB_TEMPLATE_STABLE_AGE` | `2s` | Minimum file age before import, to avoid partially copied files |

@@ -9,32 +9,29 @@ trigger the /jobs endpoints) to load. pe-sub-jobs/data/mock is untouched dev fix
 
 Normalization against editable reference lists in pe-sub-jobs/data/reference/ (seeded from Config):
   * Investor Type  -> supported list (investor_types.csv + investor_type_aliases.csv); unmatched
-                      values are PASSED THROUGH unchanged (record kept) and dumped for review.
+                      values are PASSED THROUGH unchanged (record kept) and counted on the console.
   * Agent LP Category (export "Classification") -> canonical Agent LP Classification
-                      (agent_lp_categories.csv); unmatched passed through and dumped.
+                      (agent_lp_categories.csv); unmatched passed through and counted.
   * UBS classification: the export has no UBS class column, so it is derived from the LP's own
                       attributes (agency ratings, pension assets, NAV, AUM, HNW/SPV flags, agent
                       category) using the Borrowing Base Criteria Matrix (bb_criteria_matrix.csv,
                       transcribed from pe-sub-docs/BB_CRITERIA_DESIGN.md) — see classify_ubs. The
                       Other Institutional catch-all makes this total, so it always resolves; the
                       row's UBSAR/UBSCL are cross-checked against the matrix's expected advance
-                      rate (funded-split aware) / conc limit and deviations dumped for review.
+                      rate (funded-split aware) / conc limit and deviations counted on the console.
   * Advance rates (the Floor Map): UBSAR and AgentAR are slotted into the platform's discrete rate
                       groups via rate_floor_map.csv — >=90 -> 90, 75-89.9 -> 75, 65-74.9 -> 65,
                       50-64.9 -> 50, <50 -> 0 — before seeding (and before the matrix cross-check).
 
-Outputs (always in pe-sub-jobs/data/out/):
+Outputs — EXACTLY these three ingestion files, always in pe-sub-jobs/data/out/:
   * lp_master.csv               - one distinct golden LP per investor_name (best-record consolidation)
   * lp_facility_seeds.csv       - per (facility, investor) LP-record seed rows
   * facilities.csv              - base + bank_status Active/Inactive + collateral_date := BBDate,
                                   PLUS a manufactured Inactive placeholder ("Unknown" bank) for any
                                   export account not in the base — so 100% of LP records seed (no rejects)
-  * unmatched_investor_types.csv    - Investor Types not in the reference list (+ fuzzy suggestion)
-  * unmatched_agent_categories.csv  - Agent LP Categories not in the reference list (+ suggestion)
-  * ubs_class_matrix_variance.csv   - (cls, band, funded) groups whose UBSAR/UBSCL deviate from the
-                                      matrix beyond tolerance (aggregated, not per-row)
-  * EXTRACT_SUMMARY.txt         - counts + how to load the run
-  (each review report carries a leading `#` summary line and is written only when non-empty)
+  No review reports and no summary file are written: data/out/ holds only what pe-sub-jobs ingests.
+  The run's counts (unmatched Investor Types / Agent LP Categories, UBS classification mix, matrix
+  variance) are still computed and printed to the console.
 
 Design decisions this script implements (LP_DB_EXTRACT_DESIGN.md):
   D2  (REVISED) full-column seed: lp_facility_seeds.csv carries EVERY per-LP export column
@@ -54,7 +51,7 @@ Design decisions this script implements (LP_DB_EXTRACT_DESIGN.md):
       ubs_classification is derived from the LP's attributes via the BB Criteria Matrix
       (reference/bb_criteria_matrix.csv; classify_ubs waterfall) — NOT from UBSAR: under the
       funded-split matrix a rate no longer identifies a class (90% maps to six classes). UBSAR/UBSCL
-      are instead cross-checked against the matrix (ubs_class_matrix_variance.csv).
+      are instead cross-checked against the matrix and the deviations reported on the console.
   D10 no hard-fail: bad rows are skipped and counted; a dirty file never aborts the run.
 
 Best-record consolidation (see build_master / _best): an investor appears on many rows (one per
@@ -132,9 +129,9 @@ SRC_COLS = [
 
 # CSV header (column) orders required by the pe-sub-jobs FlatFileItemReaders.
 MASTER_COLS = [
-    "investor_name", "parent", "spv", "high_qty", "investor_type", "inst_vs_hnw",
-    "region_location", "investment_grade", "sp", "mdy", "fitch", "aum", "nav", "pension",
-    "pension_funded", "ubs_classification", "ubs_default_adv_rate", "ubs_default_conc_limit",
+    "investor_name", "parent", "spv", "high_quality", "investor_type", "institutional_or_hnw",
+    "region_location", "investment_grade", "sp_rating", "moodys_rating", "fitch_rating", "aum", "nav", "pension_assets",
+    "funding_ratio", "ubs_lp_category", "ubs_default_advance_rate", "ubs_default_concentration_limit",
     "notes",
 ]
 SEED_COLS = [
@@ -142,12 +139,12 @@ SEED_COLS = [
     # non-strict reader), then every remaining per-LP export column so the seed matches
     # the full lp_records insert. Facility-level columns (AccountID, FndName, BBDate)
     # are excluded — they drive facilities.csv, not the LP record.
-    "facility_name", "investor_name", "cap_commit", "uncalled",
-    "agent_cls", "agent_rate", "agent_conc",
-    "parent", "spv", "high_qty", "investor_type", "inst_vs_hnw", "region_location",
-    "investment_grade", "ubs_cls", "sp", "mdy", "fitch", "aum", "nav", "pension",
-    "pension_funded", "pct_cap_commit", "called_cap", "pct_uncalled", "pct_called",
-    "ubs_conc", "ubs_rate", "agent_bb", "ubs_bb", "notes",
+    "facility_name", "investor_name", "capital_commitment", "uncalled_capital",
+    "agent_lp_category", "agent_advance_rate", "agent_concentration_limit",
+    "parent", "spv", "high_quality", "investor_type", "institutional_or_hnw", "region_location",
+    "investment_grade", "ubs_lp_category", "sp_rating", "moodys_rating", "fitch_rating", "aum", "nav", "pension_assets",
+    "funding_ratio", "pct_of_fund_commitments", "called_capital", "pct_of_fund_uncalled", "pct_lp_called",
+    "ubs_concentration_limit", "ubs_advance_rate", "agent_borrowing_base", "ubs_borrowing_base", "notes",
 ]
 FACILITY_COLS = [
     "agent_bank", "name", "account_number", "loan_amount", "maturity_date", "bank_status",
@@ -627,21 +624,21 @@ def build_master(export: list[dict], ref: Reference) -> MasterResult:
             "investor_name": name,
             "parent": _best(rows, "Parent"),
             "spv": yn_bool(_best(rows, "SPV")),
-            "high_qty": yn_bool(_best(rows, "HQ")),
+            "high_quality": yn_bool(_best(rows, "HQ")),
             "investor_type": investor_type,
-            "inst_vs_hnw": _best(rows, "InstitutionalHNW"),
+            "institutional_or_hnw": _best(rows, "InstitutionalHNW"),
             "region_location": _best(rows, "Region"),
             "investment_grade": yn_bool(_best(rows, "InvestmentGrade")),
-            "sp": _best(rows, "SP"),
-            "mdy": _best(rows, "Moodys"),
-            "fitch": _best(rows, "Fitch"),
+            "sp_rating": _best(rows, "SP"),
+            "moodys_rating": _best(rows, "Moodys"),
+            "fitch_rating": _best(rows, "Fitch"),
             "aum": _best(rows, "AUM"),          # LP Size passthrough (D2)
             "nav": _best(rows, "NAV"),
-            "pension": _best(rows, "PensionAssets"),
-            "pension_funded": pct(_best(rows, "FundingRatio")),
-            "ubs_classification": ubs_cls,      # BB Criteria Matrix waterfall over best attributes
-            "ubs_default_adv_rate": floor_rate_frac(best_ubsar, ref),  # Floor-Map group
-            "ubs_default_conc_limit": dec_str(_best(rows, "UBSCL")),
+            "pension_assets": _best(rows, "PensionAssets"),
+            "funding_ratio": pct(_best(rows, "FundingRatio")),
+            "ubs_lp_category": ubs_cls,      # BB Criteria Matrix waterfall over best attributes
+            "ubs_default_advance_rate": floor_rate_frac(best_ubsar, ref),  # Floor-Map group
+            "ubs_default_concentration_limit": dec_str(_best(rows, "UBSCL")),
             "notes": _best(rows, "Notes"),
         })
 
@@ -649,7 +646,7 @@ def build_master(export: list[dict], ref: Reference) -> MasterResult:
 
 
 MATRIX_TOLERANCE_PP = 2.5   # UBSAR/UBSCL deviation (percentage points) beyond which a row counts
-                            # as off-matrix in ubs_class_matrix_variance.csv
+                            # as off-matrix in the console run summary
 
 
 @dataclass
@@ -665,7 +662,7 @@ def _variance_add(variance: dict, cls: str, band: str, funded: float | None,
                   ubsar, ubscl, ref: Reference) -> None:
     """Cross-check one seed row's UBSAR/UBSCL against the matrix's expected AR/CL for its derived
     (classification, band, funded bucket), aggregating deviations per group — the sim's randomized
-    rates make a per-row report useless, and a clean feed collapses this to nothing."""
+    rates make a per-row count useless, and a clean feed collapses this to nothing."""
     expected = matrix_expected(cls, band, funded, ref)
     if expected is None:
         return
@@ -738,35 +735,35 @@ def build_seed(export: list[dict], name_by_acct: dict[str, str], ref: Reference)
         seed_rows.append({
             "facility_name": fac_name,
             "investor_name": investor,
-            "cap_commit": money_short(row["Commitments"]),
-            "uncalled": money_short(row["Uncalled"]),
-            "agent_cls": agent_cls,           # normalised to Agent LP Classification (or passthrough)
-            "agent_rate": floor_rate_pct(row["AgentAR"], ref),  # Floor-Map group
-            "agent_conc": pct(row["AgentCL"]),
+            "capital_commitment": money_short(row["Commitments"]),
+            "uncalled_capital": money_short(row["Uncalled"]),
+            "agent_lp_category": agent_cls,           # normalised to Agent LP Classification (or passthrough)
+            "agent_advance_rate": floor_rate_pct(row["AgentAR"], ref),  # Floor-Map group
+            "agent_concentration_limit": pct(row["AgentCL"]),
             # Full per-LP column set (row-level values, no LP-Master consolidation):
             "parent": as_is(row["Parent"]),
             "spv": yn_bool(row["SPV"]),
-            "high_qty": yn_bool(row["HQ"]),
+            "high_quality": yn_bool(row["HQ"]),
             "investor_type": map_investor_type(row["InvestorType"], ref)[0],
-            "inst_vs_hnw": as_is(row["InstitutionalHNW"]),
+            "institutional_or_hnw": as_is(row["InstitutionalHNW"]),
             "region_location": as_is(row["Region"]),
             "investment_grade": yn_bool(row["InvestmentGrade"]),
-            "ubs_cls": ubs_cls,               # per-row attributes via BB Criteria Matrix waterfall
-            "sp": as_is(row["SP"]),
-            "mdy": as_is(row["Moodys"]),
-            "fitch": as_is(row["Fitch"]),
+            "ubs_lp_category": ubs_cls,               # per-row attributes via BB Criteria Matrix waterfall
+            "sp_rating": as_is(row["SP"]),
+            "moodys_rating": as_is(row["Moodys"]),
+            "fitch_rating": as_is(row["Fitch"]),
             "aum": as_is(row["AUM"]),         # LP Size passthrough (UI formats)
             "nav": as_is(row["NAV"]),
-            "pension": as_is(row["PensionAssets"]),
-            "pension_funded": pct(row["FundingRatio"]),
-            "pct_cap_commit": pct(row["PercentOfCommitments"]),
-            "called_cap": money_short(row["Called"]),
-            "pct_uncalled": pct(row["PercentOfUncalled"]),
-            "pct_called": pct(row["CalledPercent"]),
-            "ubs_conc": pct(row["UBSCL"]),
-            "ubs_rate": floor_rate_pct(row["UBSAR"], ref),  # Floor-Map group
-            "agent_bb": money_short(row["AgentBB"]),
-            "ubs_bb": money_short(row["UBSBB"]),
+            "pension_assets": as_is(row["PensionAssets"]),
+            "funding_ratio": pct(row["FundingRatio"]),
+            "pct_of_fund_commitments": pct(row["PercentOfCommitments"]),
+            "called_capital": money_short(row["Called"]),
+            "pct_of_fund_uncalled": pct(row["PercentOfUncalled"]),
+            "pct_lp_called": pct(row["CalledPercent"]),
+            "ubs_concentration_limit": pct(row["UBSCL"]),
+            "ubs_advance_rate": floor_rate_pct(row["UBSAR"], ref),  # Floor-Map group
+            "agent_borrowing_base": money_short(row["AgentBB"]),
+            "ubs_borrowing_base": money_short(row["UBSBB"]),
             "notes": as_is(row["Notes"]),
         })
         counts["written"] += 1
@@ -842,20 +839,6 @@ def write_facilities(path: Path, rows: list[list[str]]) -> None:
             w.writerow(r[: len(FACILITY_COLS)])
 
 
-def write_report(path: Path, summary: str, header: list[str], rows) -> None:
-    """A review report: one `#` summary line, then a normal CSV (header + rows). The comment
-    line explains what the report means so it is self-describing when opened on its own."""
-    with path.open("w", newline="", encoding="utf-8") as fh:
-        fh.write(f"# {summary}\n")
-        w = csv.writer(fh)
-        w.writerow(header)
-        w.writerows(rows)
-
-
-def write_summary(path: Path, lines: list[str]) -> None:
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
 def main() -> int:
     # No command-line arguments: the run is configured by the EXPORT_FILE variable near the top of
     # this file (edit it, then re-run). All outputs go to OUT_DIR; the app tree is never modified.
@@ -881,65 +864,21 @@ def main() -> int:
 
     generated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Clean slate: remove EVERY file left in data/out/ by a previous run (seed CSVs, reports,
-    # EXTRACT_SUMMARY.txt) so the directory holds only this run's outputs — reports are written
-    # below only when non-empty, and a stale report or summary would misdescribe this run.
+    # Clean slate: remove EVERY file left in data/out/ by a previous run (including the review
+    # reports and EXTRACT_SUMMARY.txt earlier versions of this script wrote) so the directory holds
+    # only this run's three ingestion CSVs and pe-sub-jobs never sees a stale file.
     # Deliberately done AFTER all inputs are read, so a failed read leaves the last good outputs
     # in place. Only out/ is cleared; import/ (export + chaos log) and reference/ are never touched.
     for old in out_dir.iterdir():
         if old.is_file():
             old.unlink()
 
-    # --- app-facing CSVs (read directly from data/out/ by pe-sub-jobs on startup) ---
+    # --- the three ingestion CSVs (read directly from data/out/ by pe-sub-jobs on startup) ---
     write_csv(out_dir / "lp_master.csv", MASTER_COLS, mr.rows)
     write_csv(out_dir / "lp_facility_seeds.csv", SEED_COLS, sr.rows)
     write_facilities(out_dir / "facilities.csv", fac_rows)
 
-    # --- review reports (only when there is something to report) ---
-    if mr.itype_unmatched:
-        write_report(
-            out_dir / "unmatched_investor_types.csv",
-            f"{len(mr.itype_unmatched)} Investor Type value(s) not in pe-sub-jobs/data/reference/"
-            f"investor_types.csv. The record is still included (original value kept); an analyst "
-            f"should map each to a supported type or add an alias. Generated {generated}.",
-            ["raw_investor_type", "occurrences", "suggested_canonical"],
-            [(v, c, _suggest(v, ref.itype_canonical)) for v, c in mr.itype_unmatched.most_common()],
-        )
-    if sr.agent_unmatched:
-        write_report(
-            out_dir / "unmatched_agent_categories.csv",
-            f"{len(sr.agent_unmatched)} Agent LP Category value(s) (export 'Classification') not in "
-            f"pe-sub-jobs/data/reference/agent_lp_categories.csv. The seed row keeps the original value; add an "
-            f"alias so it maps to a canonical Agent LP Classification. Generated {generated}.",
-            ["raw_classification", "occurrences", "suggested_canonical"],
-            [(v, c, _suggest(v, ref.agent_canonical)) for v, c in sr.agent_unmatched.most_common()],
-        )
-    variance_rows = []
-    for (cls, band, bucket), a in sorted(sr.variance.items(), key=lambda kv: -kv[1]["rows"]):
-        if a["ar_beyond"] or a["cl_beyond"]:
-            variance_rows.append((
-                cls, band, bucket, a["rows"],
-                _trim(Decimal(str(a["exp_ar"]))),
-                round(a["ar_sum"] / a["ar_n"], 1) if a["ar_n"] else "",
-                a["ar_beyond"], round(a["ar_max"], 1),
-                _trim(Decimal(str(a["exp_cl"]))),
-                round(a["cl_sum"] / a["cl_n"], 1) if a["cl_n"] else "",
-                a["cl_beyond"], round(a["cl_max"], 1),
-            ))
-    if variance_rows:
-        write_report(
-            out_dir / "ubs_class_matrix_variance.csv",
-            f"Seed rows whose UBSAR/UBSCL deviate more than {MATRIX_TOLERANCE_PP}pp from the BB "
-            f"Criteria Matrix expectation for their derived (classification, band, funded bucket), "
-            f"aggregated per group (reference/bb_criteria_matrix.csv). The seed keeps the export's "
-            f"values (D8); an analyst should decide whether the rate/limit or the classification "
-            f"is wrong. Empty on a matrix-consistent feed. Generated {generated}.",
-            ["ubs_classification", "rating_band", "funded_bucket", "rows",
-             "expected_ar_pct", "mean_ubsar_pct", "ar_rows_beyond_tol", "max_ar_dev_pp",
-             "expected_cl_pct", "mean_ubscl_pct", "cl_rows_beyond_tol", "max_cl_dev_pp"],
-            variance_rows,
-        )
-    # --- human summary of the whole run ---
+    # --- console-only run summary (nothing else is written to data/out/) ---
     total_facilities = fac_counts["active"] + fac_counts["inactive"] + fac_counts["inactive_new"]
 
     def fmt_cls(counter: Counter) -> str:
@@ -973,17 +912,26 @@ def main() -> int:
         f"    seed rows ({sr.counts['written']} rows) : {fmt_cls(sr.cls_counts)}",
         f"  matrix variance (Floor-Mapped UBSAR / raw UBSCL vs matrix, tol ±{MATRIX_TOLERANCE_PP}pp) : "
         f"{ar_beyond} AR row(s), {cl_beyond} CL row(s) beyond tolerance",
-        "",
-        "reports (only written when non-empty):",
-        f"  unmatched_investor_types.csv: {len(mr.itype_unmatched)} value(s)",
-        f"  unmatched_agent_categories.csv : {len(sr.agent_unmatched)} value(s)",
-        f"  ubs_class_matrix_variance.csv : {len(variance_rows)} group(s)",
+    ]
+    # No review report files any more, so the values an analyst would have opened them for are
+    # listed here instead (original value kept in the output either way; add a reference alias).
+    if mr.itype_unmatched:
+        summary_lines.append("")
+        summary_lines.append("unmatched investor types (reference/investor_types.csv) — value, rows, suggestion:")
+        summary_lines += [f"  {v} ({c}) -> {_suggest(v, ref.itype_canonical) or '?'}"
+                          for v, c in mr.itype_unmatched.most_common()]
+    if sr.agent_unmatched:
+        summary_lines.append("")
+        summary_lines.append("unmatched agent LP categories (reference/agent_lp_categories.csv) — value, rows, suggestion:")
+        summary_lines += [f"  {v} ({c}) -> {_suggest(v, ref.agent_canonical) or '?'}"
+                          for v, c in sr.agent_unmatched.most_common()]
+    summary_lines += [
         "",
         "Every export account maps to a facility (existing or manufactured), so no LP record is",
-        "rejected. pe-sub-jobs reads these files directly from data/out/ on startup — restart",
-        "pe-sub-jobs (or trigger its /jobs endpoints) to load. data/mock is not involved.",
+        "rejected. data/out/ holds exactly the three ingestion CSVs above — pe-sub-jobs reads them",
+        "directly on startup, so restart it (or trigger its /jobs endpoints) to load. data/mock is",
+        "not involved.",
     ]
-    write_summary(out_dir / "EXTRACT_SUMMARY.txt", summary_lines)
 
     # --- console echo (counts onward; the header/paths block is skipped) ---
     print("\n".join(summary_lines[7:]))

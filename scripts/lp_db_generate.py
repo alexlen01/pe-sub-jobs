@@ -19,7 +19,7 @@ data shape the product owner described:
     across all its rows (the defect was randomizing these per row). Only the facility-specific
     financials (commitment, called/uncalled, BB) vary by position.
   * BASE values use the canonical Investor Type / Agent LP Category vocabularies from
-    data/reference/, so with the chaos monkey off the extract's unmatched-dumps come back empty.
+    data/reference/, so with the chaos monkey off the extract's unmatched counts come back zero.
   * Agency-rating presence is tied to the Agent LP Category (RATING_PRESENCE): only "Rated
     Included" LPs (plus a small crossover) carry usable ratings. Since classify_ubs derives
     "Rated Investor" from ANY usable rating, rating everyone skewed the derived UBS mix to ~98%
@@ -36,11 +36,12 @@ AUM/NAV/PensionAssets sizes) get real noise (suffix drops, ' - Tranche A', case 
 mix-ups, range strings like '500M - 2Bn'). The result: the same LP is spelled differently across
 rows and every downstream parser/normalizer/report in lp_db_extract.py is exercised by the file
 itself, exactly as a real export would. Chaos uses its own CHAOS_SEED rng, so the underlying clean
-dataset is IDENTICAL whether CHAOS_ENABLED is True or False. Every mutation is logged (ground
-truth) to '<export name>.chaos_log.csv' next to the XLSX.
+dataset is IDENTICAL whether CHAOS_ENABLED is True or False. Mutations are summarized (count per
+column and per pattern) on the console; no ground-truth log file is written — re-running with the
+same CHAOS_SEED reproduces the exact same degradation, so the mutations stay recoverable.
 
-Output: overwrites data/import/<EXPORT_NAME> (the same file lp_db_extract.py reads) plus the chaos
-log. Re-run the extract afterwards to produce the seed CSVs.
+Output: ONE file — data/import/<EXPORT_NAME> (the same file lp_db_extract.py reads); nothing else
+is written. Re-run the extract afterwards to produce the three ingestion CSVs.
 
 NO command-line arguments — tune the constants below and re-run.
 """
@@ -88,8 +89,8 @@ REGIONS = ["North America", "Europe", "Asia Pacific", "Latin America", "Middle E
 
 # investor_type -> (name-suffix templates, size-measure). Canonical per data/reference/investor_types.csv.
 TYPE_SPECS = {
-    "Public Pension":        (["Public Employees Retirement System", "State Teachers Retirement", "State Pension Fund"], "pension"),
-    "Pension Fund":          (["Pension Fund", "Retirement Trust", "Pension Scheme"], "pension"),
+    "Public Pension":        (["Public Employees Retirement System", "State Teachers Retirement", "State Pension Fund"], "pension_assets"),
+    "Pension Fund":          (["Pension Fund", "Retirement Trust", "Pension Scheme"], "pension_assets"),
     "Endowment":             (["University Endowment", "Endowment Fund", "College Endowment"], "aum"),
     "Foundation":            (["Foundation", "Charitable Foundation", "Family Foundation"], "aum"),
     "Family Office":         (["Family Office", "Family Capital", "Family Holdings"], "aum"),
@@ -124,7 +125,7 @@ AGENT_CATEGORIES = [
 # Raw UBSAR bands the sim draws from (band_lo, band_hi, weight). Rates are continuous on purpose:
 # the extract Floor-Maps them to the 90/75/65/50/0 groups (reference/rate_floor_map.csv) and derives
 # ubs_classification from the LP's ATTRIBUTES via reference/bb_criteria_matrix.csv — not from the
-# rate — then cross-checks rate-vs-matrix in ubs_class_matrix_variance.csv.
+# rate — then cross-checks rate-vs-matrix and reports the deviation counts on its console summary.
 UBS_BANDS = [
     (0.90, 0.97, 28),
     (0.75, 0.90, 26),
@@ -356,7 +357,7 @@ def size_label(measure: str) -> str:
     # every classify_ubs branch sees traffic.
     def log_uniform(lo: float, hi: float) -> float:
         return 10 ** random.uniform(math.log10(lo), math.log10(hi))
-    if measure == "pension":
+    if measure == "pension_assets":
         return f"${log_uniform(0.8, 120):.1f}B"
     if measure == "nav":
         return f"${log_uniform(0.2, 8):.1f}B"
@@ -395,7 +396,7 @@ def build_investor(idx: int, used_names: set) -> dict:
         sp, mdy, fitch = (random.choice(["NR", "NR", ""]) for _ in range(3))
     lo, hi, _ = pick_weighted(UBS_BANDS, [w for *_, w in UBS_BANDS])
     ubsar = round(random.uniform(lo, hi), 2)
-    is_pension = measure == "pension"
+    is_pension = measure == "pension_assets"
     return {
         "name": name,
         "parent": name,
@@ -407,12 +408,12 @@ def build_investor(idx: int, used_names: set) -> dict:
         "ig": "Yes" if ig else "No",
         "cls": agent_cat,
         "agent_ar": agent_ar,
-        "sp": sp, "mdy": mdy, "fitch": fitch,
+        "sp_rating": sp, "moodys_rating": mdy, "fitch_rating": fitch,
         # nav-measure LPs (FoF / Hedge Fund) report manager-level AUM alongside fund NAV —
         # without it the "FoF & Other > $10Bn AUM" branch of classify_ubs is unreachable.
         "aum": size_label("aum") if measure in ("aum", "nav") else None,
         "nav": size_label("nav") if measure == "nav" else None,
-        "pension": size_label("pension") if is_pension else None,
+        "pension_assets": size_label("pension_assets") if is_pension else None,
         "funding": round(random.uniform(0.72, 1.08), 2) if is_pension else None,
         "ubsar": ubsar,
         "agent_cl": round(random.uniform(0.05, 0.15), 2),
@@ -449,7 +450,7 @@ def main() -> int:
     while len(positions) < TARGET_ROWS:
         inv = build_investor(investor_count, used_names)
         investor_count += 1
-        rated_lps += any(r not in ("NR", "") for r in (inv["sp"], inv["mdy"], inv["fitch"]))
+        rated_lps += any(r not in ("NR", "") for r in (inv["sp_rating"], inv["moodys_rating"], inv["fitch_rating"]))
         r = random.randint(REPEAT_MIN, REPEAT_MAX)
         r = min(r, TARGET_ROWS - len(positions))      # trim last LP to land exactly on TARGET
         chosen = weighted_sample_without_replacement(accts, [fac_weights[a] for a in accts], r)
@@ -464,9 +465,9 @@ def main() -> int:
             row = {
                 **inv,
                 "acct": acct, "fund": fund_by_acct[acct], "bbdate": fac_bbdate[acct],
-                "commit": commit, "called": called, "uncalled": uncalled,
+                "commit": commit, "called": called, "uncalled_capital": uncalled,
                 "called_pct": round(called / commit, 2),
-                "agent_bb": agent_bb, "ubs_bb": ubs_bb,
+                "agent_borrowing_base": agent_bb, "ubs_borrowing_base": ubs_bb,
             }
             positions.append(row)
             per_fac[acct].append(row)
@@ -474,23 +475,22 @@ def main() -> int:
     # Second pass: per-facility share percentages.
     for acct, rows in per_fac.items():
         tot_c = sum(r["commit"] for r in rows) or 1
-        tot_u = sum(r["uncalled"] for r in rows) or 1
+        tot_u = sum(r["uncalled_capital"] for r in rows) or 1
         for r in rows:
             r["pct_commit"] = round(r["commit"] / tot_c, 4)
-            r["pct_uncalled"] = round(r["uncalled"] / tot_u, 4)
+            r["pct_of_fund_uncalled"] = round(r["uncalled_capital"] / tot_u, 4)
 
     # Assemble the export rows in SRC_COLS order (as dicts so the chaos monkey can address columns).
     export_rows = [dict(zip(SRC_COLS, [
         r["acct"], r["fund"], r["name"], r["parent"], r["spv"], r["itype"], r["region"], r["hq"],
-        r["inst"], r["ig"], r["cls"], "", r["sp"], r["mdy"], r["fitch"],
-        r["aum"], r["nav"], r["pension"], r["funding"], r["ubsar"], r["agent_ar"], r["commit"],
-        r["pct_commit"], r["called"], r["uncalled"], r["pct_uncalled"], r["called_pct"],
-        r["agent_cl"], r["ubs_cl"], r["agent_bb"], r["ubs_bb"], r["bbdate"],
+        r["inst"], r["ig"], r["cls"], "", r["sp_rating"], r["moodys_rating"], r["fitch_rating"],
+        r["aum"], r["nav"], r["pension_assets"], r["funding"], r["ubsar"], r["agent_ar"], r["commit"],
+        r["pct_commit"], r["called"], r["uncalled_capital"], r["pct_of_fund_uncalled"], r["called_pct"],
+        r["agent_cl"], r["ubs_cl"], r["agent_borrowing_base"], r["ubs_borrowing_base"], r["bbdate"],
     ])) for r in positions]
 
     # Chaos monkey: degrade what gets WRITTEN, so the XLSX itself has realistic manual-entry
     # quality. Own rng — the clean base data above is identical whether chaos is on or off.
-    chaos_log = EXPORT_OUT.with_name(EXPORT_OUT.stem + ".chaos_log.csv")
     chaos_muts: list[tuple] = []
     if CHAOS_ENABLED:
         chaos_muts = apply_chaos(export_rows, random.Random(CHAOS_SEED))
@@ -505,16 +505,10 @@ def main() -> int:
     EXPORT_OUT.parent.mkdir(parents=True, exist_ok=True)
     wb.save(EXPORT_OUT)
 
-    # Ground-truth chaos log next to the export (what was degraded, from what, to what).
-    chaos_log.unlink(missing_ok=True)
-    if chaos_muts:
-        with chaos_log.open("w", newline="", encoding="utf-8") as fh:
-            fh.write(f"# Chaos monkey (seed {CHAOS_SEED}): {len(chaos_muts)} value(s) degraded in "
-                     f"{EXPORT_OUT.name} at generation time. Ground truth for verifying the "
-                     f"extract's normalizers; the extract itself never reads this file.\n")
-            w = csv.writer(fh)
-            w.writerow(["export_row", "column", "pattern", "original", "corrupted"])
-            w.writerows(chaos_muts)
+    # The export is the ONLY file this script produces. Earlier versions dropped a
+    # '<export>.chaos_log.csv' ground-truth log beside it; remove any left over so data/import/
+    # holds just the export (the degradation is reproducible from CHAOS_SEED instead).
+    EXPORT_OUT.with_name(EXPORT_OUT.stem + ".chaos_log.csv").unlink(missing_ok=True)
 
     fac_sizes = sorted(len(v) for v in per_fac.values())
     print(f"wrote {EXPORT_OUT}")
@@ -526,9 +520,11 @@ def main() -> int:
     print(f"  LPs with usable ratings   : {rated_lps} ({rated_lps/investor_count:.0%})")
     if CHAOS_ENABLED:
         by_col = Counter(col for _, col, *_ in chaos_muts)
+        by_pattern = Counter(pattern for _, _, pattern, *_ in chaos_muts)
         print(f"  chaos monkey (seed {CHAOS_SEED}) : {len(chaos_muts)} value(s) degraded "
               f"({', '.join(f'{c} {n}' for c, n in by_col.most_common())})")
-        print(f"  chaos ground-truth log    : {chaos_log}")
+        print(f"    by pattern              : {', '.join(f'{p} {n}' for p, n in by_pattern.most_common())}")
+        print(f"    (no log file; re-run with CHAOS_SEED={CHAOS_SEED} to reproduce these exactly)")
     else:
         print("  chaos monkey              : disabled (clean export)")
     return 0

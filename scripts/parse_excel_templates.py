@@ -2,7 +2,7 @@
 r"""
 Parse Excel workbook → generate BB template
 
-Analyzes an Excel workbook and generates a template metadata file (BB-Template-Import-<slug>.xlsx).
+Analyzes an Excel workbook and generates a template metadata file (<slug>.xlsx).
 Standalone utility with no dependencies on external services or repositories. Features robust
 investor-data validation to skip Legend, Notes, and metadata rows.
 
@@ -13,7 +13,7 @@ Example:
     python parse_excel_templates.py agent-bb-2026.xlsx
 
 Output:
-    Writes BB-Template-Import-<slug>.xlsx to the same directory as the input file.
+    Writes <slug>.xlsx to the same directory as the input file.
 """
 from __future__ import annotations
 
@@ -676,7 +676,7 @@ class ExcelAnalyzer:
     def _slug_from_filename(self, file_name: str) -> str:
         base = re.sub(r"(?i)\.(xlsx|xls|csv)$", "", file_name or "")
         slug = re.sub(r"[^a-z0-9]+", "-", base.lower())
-        slug = re.sub(r"^(agent-bb|bb-template-import|bb-template)-", "", slug)
+        slug = re.sub(r"^(agent-bb|bb-template)-", "", slug)
         slug = slug.strip("-")
         if len(slug) > 50:   # bb_templates.template_slug is VARCHAR(50); trim at a word boundary
             slug = re.sub(r"-+[^-]*$", "", slug[:50])
@@ -961,7 +961,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 1
 
     slug = analysis.slug.value or "untitled"
-    xlsx_path = input_path.parent / f"BB-Template-Import-{slug}.xlsx"
+    xlsx_path = input_path.parent / f"{slug}.xlsx"
+    if xlsx_path.resolve() == input_path.resolve():
+        raise SystemExit(
+            f"Refusing to overwrite the source workbook: template output resolves to '{xlsx_path}'. "
+            f"Rename the input file or run it from a different directory."
+        )
     builder.write_import_workbook(xlsx_path)
     print(f"\nTemplate written: {xlsx_path}")
     return 0

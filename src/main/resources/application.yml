@@ -44,4 +44,4 @@ bb-template-import:
 
 logging:
   file:
-    path: ${LOG_PATH:logs}
+    path: ${LOG_PATH:../pe-sub/logs}

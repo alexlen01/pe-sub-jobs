@@ -26,7 +26,7 @@ import java.util.Map;
 /**
  * Classification concentration-limit defaults feed. CSV columns:
  * {@code classification,limit_pct} — the default per-LP concentration limit as a
- * percent of total uncalled capital. Each chunk is merged into pe-sub-api's
+ * percent of total uncalledCapital capital. Each chunk is merged into pe-sub-api's
  * {@code cls_conc_limit_defaults} config map via its SERVICE endpoint, so a feed updates
  * only the classes it includes and leaves the rest untouched. The API persists and refreshes
  * its in-memory cache in the same call — no follow-up config reload is needed.

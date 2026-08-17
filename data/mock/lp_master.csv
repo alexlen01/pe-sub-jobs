@@ -1,4 +1,4 @@
-"investor_name","parent","spv","high_qty","investor_type","inst_vs_hnw","region_location","investment_grade","sp","mdy","fitch","aum","nav","pension","pension_funded","ubs_classification","ubs_default_adv_rate","ubs_default_conc_limit","notes",""
+"investor_name","parent","spv","high_quality","investor_type","institutional_or_hnw","region_location","investment_grade","sp_rating","moodys_rating","fitch_rating","aum","nav","pension_assets","funding_ratio","ubs_lp_category","ubs_default_advance_rate","ubs_default_concentration_limit","notes",""
 "California Public Employees' Retirement System","CalPERS Board","FALSE","TRUE","Pension Fund","Institutional","North America","TRUE","AA-","Aa2","AA-","$500B","","$500B","70%","Rated Included","0.9","0.05","",""
 "Ontario Teachers' Pension Plan","Ontario Teachers' Pension Plan Board","FALSE","TRUE","Pension Fund","Institutional","Canada","TRUE","AA-","Aa3","AA-","$220B","","$220B","105%","Rated Included","0.9","0.05","",""
 "CDPQ","Government of Quebec","FALSE","TRUE","Pension Fund","Institutional","Canada","TRUE","AA+","Aa1","AA+","$390B","","$390B","115%","Rated Included","0.9","0.05","",""

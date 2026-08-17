@@ -79,29 +79,29 @@ public class LpMasterIngestJobConfig {
                 .resource(new FileSystemResource(filePath))
                 .linesToSkip(1)
                 .lineTokenizer(CsvLineTokenizers.lenientQuotedCsvTokenizer(
-                        "investorName", "parent", "spv", "highQty", "investorType",
-                        "instVsHnw", "regionLocation", "investmentGrade", "sp", "mdy",
-                        "fitch", "aum", "nav", "pension", "pensionFunded",
-                        "ubsClassification", "ubsDefaultAdvRate", "ubsDefaultConcLimit", "notes"))
+                        "investorName", "parent", "spv", "highQuality", "investorType",
+                        "institutionalOrHnw", "regionLocation", "investmentGrade", "spRating", "moodysRating",
+                        "fitchRating", "aum", "nav", "pensionAssets", "fundingRatio",
+                        "ubsLpCategory", "ubsDefaultAdvanceRate", "ubsDefaultConcentrationLimit", "notes"))
                 .fieldSetMapper(fs -> new LpMasterRow(
                         fs.readString("investorName"),
                         fs.readString("parent"),
                         fs.readString("spv"),
-                        fs.readString("highQty"),
+                        fs.readString("highQuality"),
                         fs.readString("investorType"),
-                        fs.readString("instVsHnw"),
+                        fs.readString("institutionalOrHnw"),
                         fs.readString("regionLocation"),
                         fs.readString("investmentGrade"),
-                        fs.readString("sp"),
-                        fs.readString("mdy"),
-                        fs.readString("fitch"),
+                        fs.readString("spRating"),
+                        fs.readString("moodysRating"),
+                        fs.readString("fitchRating"),
                         fs.readString("aum"),
                         fs.readString("nav"),
-                        fs.readString("pension"),
-                        fs.readString("pensionFunded"),
-                        fs.readString("ubsClassification"),
-                        fs.readString("ubsDefaultAdvRate"),
-                        fs.readString("ubsDefaultConcLimit"),
+                        fs.readString("pensionAssets"),
+                        fs.readString("fundingRatio"),
+                        fs.readString("ubsLpCategory"),
+                        fs.readString("ubsDefaultAdvanceRate"),
+                        fs.readString("ubsDefaultConcentrationLimit"),
                         fs.readString("notes")
                 ))
                 .build();

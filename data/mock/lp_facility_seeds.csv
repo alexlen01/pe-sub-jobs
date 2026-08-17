@@ -1,4 +1,4 @@
-"facility_name","investor_name","cap_commit","uncalled","agent_cls","agent_rate","agent_conc","","","","","","","","","","","","",""
+"facility_name","investor_name","capital_commitment","uncalled_capital","agent_lp_category","agent_advance_rate","agent_concentration_limit","","","","","","","","","","","","",""
 "Carlyle Buyout Umbrella","California Public Employees' Retirement System","$250M","$75M","Rated Included","90%","5%","","","","","","","","","","","","",""
 "Carlyle Buyout Umbrella","Ontario Teachers' Pension Plan","$200M","$60M","Rated Included","90%","5%","","","","","","","","","","","","",""
 "Carlyle Buyout Umbrella","Abu Dhabi Investment Authority","$300M","$90M","Rated Included","90%","5%","","","","","","","","","","","","",""

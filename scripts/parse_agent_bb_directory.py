@@ -4,11 +4,11 @@ Batch-process Excel files organized by subdirectories.
 
 Walks through a directory hierarchy where each subdirectory represents an Agent Bank and contains
 individual Excel files (.xlsx/.xls). For each file, analyzes it and generates a
-BB-Template-Import-*.xlsx template. Features robust data validation to skip Legend, Notes, and
+<slug>.xlsx template. Features robust data validation to skip Legend, Notes, and
 metadata rows.
 
-All generated templates are collected to <input_directory>/bb_templates/ along with a
-run_summary.csv log file tracking processing results.
+All generated templates are collected to <input_directory>/bb_templates/. Processing results
+are printed to stdout as a run summary; no summary file is written.
 
 USAGE
     python parse_agent_bb_directory.py <input_directory>
@@ -26,20 +26,18 @@ Input directory structure:
 
 Output:
     ~/AgentBBs/bb_templates/
-    ├── BB-Template-Import-agent-bb-2026.xlsx
-    ├── BB-Template-Import-bb-2026-07-20.xlsx
-    └── run_summary.csv
+    ├── agent-bb-2026.xlsx
+    └── bb-2026-07-20.xlsx
 
-Log file format (CSV):
-    Agent Bank,Source File,Template Generated,Output File,Status,Notes
-    Wells Fargo,agent_bb_2026-07-15.xlsx,YES,BB-Template-Import-agent-bb-2026.xlsx,SUCCESS,
-    JPM,bb-2026-07-20.xlsx,YES,BB-Template-Import-bb-2026-07-20.xlsx,SUCCESS,
-    BoA,CP-VII-2026.xlsx,NO,,SKIPPED,No LP-grid sheet recognized
+Run summary (printed to stdout):
+    Agent Bank   Source File               Generated  Output File          Status   Notes
+    Wells Fargo  agent_bb_2026-07-15.xlsx  YES        agent-bb-2026.xlsx   SUCCESS
+    JPM          bb-2026-07-20.xlsx        YES        bb-2026-07-20.xlsx   SUCCESS
+    BoA          CP-VII-2026.xlsx          NO                              SKIPPED  No LP-grid sheet recognized
 """
 from __future__ import annotations
 
 import argparse
-import csv
 import logging
 import re
 import sys
@@ -201,7 +199,7 @@ def resolve_output_path(slug: str, output_dir: Path) -> tuple[Path, str]:
     """
     Resolve output path with collision avoidance.
 
-    If `BB-Template-Import-{slug}.xlsx` already exists in output_dir, appends a numeric
+    If `{slug}.xlsx` already exists in output_dir, appends a numeric
     suffix: `-1`, `-2`, etc. until a unique filename is found.
 
     Returns:
@@ -209,7 +207,7 @@ def resolve_output_path(slug: str, output_dir: Path) -> tuple[Path, str]:
         or "-1", "-2", etc. if collision was detected and resolved
     """
     output_dir.mkdir(parents=True, exist_ok=True)
-    base_name = f"BB-Template-Import-{slug}.xlsx"
+    base_name = f"{slug}.xlsx"
     output_path = output_dir / base_name
 
     if not output_path.exists():
@@ -219,7 +217,7 @@ def resolve_output_path(slug: str, output_dir: Path) -> tuple[Path, str]:
     suffix_num = 1
     while True:
         collision_suffix = f"-{suffix_num}"
-        alternate_name = f"BB-Template-Import-{slug}{collision_suffix}.xlsx"
+        alternate_name = f"{slug}{collision_suffix}.xlsx"
         alternate_path = output_dir / alternate_name
         if not alternate_path.exists():
             return alternate_path, collision_suffix
@@ -236,8 +234,8 @@ def process_agent_bb_directory(input_dir: Path) -> tuple[int, int, int]:
     """
     Walk through subdirectories and process each .xlsx file.
 
-    All generated templates are collected to input_dir/bb_templates/. A summary log file
-    (run_summary.csv) is written to the same directory.
+    All generated templates are collected to input_dir/bb_templates/. The run summary is
+    printed to stdout.
 
     Args:
         input_dir: Root directory containing subdirectories with Excel files (each subdirectory
@@ -355,57 +353,52 @@ def process_agent_bb_directory(input_dir: Path) -> tuple[int, int, int]:
                 log_records.append(log_entry)
                 files_failed += 1
 
-    # Write summary log file
-    log_file_path = output_dir / "run_summary.csv"
-    _write_summary_log(log_file_path, log_records, files_processed, files_skipped, files_failed)
+    print("\n" + render_run_summary(log_records, files_processed, files_skipped, files_failed))
 
     logger.info(
         f"\nBatch process complete: {files_processed} succeeded, {files_skipped} skipped, {files_failed} failed"
     )
-    logger.info(f"Summary log written to: {log_file_path}")
     return files_processed, files_skipped, files_failed
 
 
-def _write_summary_log(
-    log_path: Path,
+def render_run_summary(
     records: list[dict],
     processed: int,
     skipped: int,
     failed: int,
-) -> None:
+) -> str:
     """
-    Write processing results to a CSV summary log file.
+    Render processing results as a plain-text table for stdout.
 
     Args:
-        log_path: Path to the output CSV file
         records: List of processing log entries
         processed: Count of successful templates
         skipped: Count of skipped files
         failed: Count of failed files
     """
     fieldnames = ["Agent Bank", "Source File", "Template Generated", "Output File", "Status", "Notes"]
+    widths = [
+        max(len(name), *(len(str(r.get(name, ""))) for r in records)) if records else len(name)
+        for name in fieldnames
+    ]
 
-    try:
-        with open(log_path, "w", newline="", encoding="utf-8") as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+    def row(values: list[str]) -> str:
+        return "  ".join(v.ljust(w) for v, w in zip(values, widths)).rstrip()
 
-            # Write header
-            writer.writeheader()
-
-            # Write all records
-            writer.writerows(records)
-
-            # Write summary stats as comments (CSV-readable as empty rows with notes in last column)
-            csvfile.write("\n")
-            csvfile.write(f"# Total Files Processed: {processed}\n")
-            csvfile.write(f"# Total Files Skipped: {skipped}\n")
-            csvfile.write(f"# Total Files Failed: {failed}\n")
-            csvfile.write(f"# Total Files: {processed + skipped + failed}\n")
-
-        logger.info(f"Summary log written: {processed} SUCCESS, {skipped} SKIPPED, {failed} FAILED")
-
-    except Exception as e:
-        logger.error(f"Failed to write summary log: {e}")
+    lines = [
+        "Run summary",
+        row(fieldnames),
+        row(["-" * w for w in widths]),
+    ]
+    lines.extend(row([str(r.get(name, "")) for name in fieldnames]) for r in records)
+    lines.extend([
+        "",
+        f"Total Files Processed: {processed}",
+        f"Total Files Skipped:   {skipped}",
+        f"Total Files Failed:    {failed}",
+        f"Total Files:           {processed + skipped + failed}",
+    ])
+    return "\n".join(lines)
 
 
 # ==============================================================================================

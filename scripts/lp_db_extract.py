@@ -2,10 +2,15 @@
 r"""
 LP DB Export -> seed extract  (one-off, day-1 bootstrap; see pe-sub-docs/LP_DB_EXTRACT_DESIGN.md)
 
-Standalone utility. Reads the LP DB Export (XLSX) plus a base facilities.csv and writes ALL
-outputs into one directory (pe-sub-jobs/data/out/) — the directory pe-sub-jobs reads directly
-on startup (see ingest.* in application.yml). Review the output, then restart pe-sub-jobs (or
-trigger the /jobs endpoints) to load. pe-sub-jobs/data/mock is untouched dev fixture data.
+Standalone utility. Reads the LP DB Export (XLSX) plus the Agent Bank Summary report (XLSX) and
+writes ALL outputs into one directory (pe-sub-jobs/data/out/) — the directory pe-sub-jobs reads
+directly on startup (see ingest.* in application.yml). Review the output, then restart pe-sub-jobs
+(or trigger the /jobs endpoints) to load. pe-sub-jobs/data/mock is untouched dev fixture data.
+
+The Agent Bank Summary report (data/import/AgentBankSummaryRpt.xlsx) is the ORIGINAL SOURCE for
+loan-level facility attributes — agent bank, loan amount, maturity date and the agent-reported
+status — so the facility list is derived from the agent's own report rather than a hand-maintained
+CSV. It is a banded print layout, not a table: see read_agent_bank_summary.
 
 Normalization against editable reference lists in pe-sub-jobs/data/reference/ (seeded from Config):
   * Investor Type  -> supported list (investor_types.csv + investor_type_aliases.csv); unmatched
@@ -26,9 +31,10 @@ Normalization against editable reference lists in pe-sub-jobs/data/reference/ (s
 Outputs — EXACTLY these three ingestion files, always in pe-sub-jobs/data/out/:
   * lp_master.csv               - one distinct golden LP per investor_name (best-record consolidation)
   * lp_facility_seeds.csv       - per (facility, investor) LP-record seed rows
-  * facilities.csv              - base + bank_status Active/Inactive + collateral_date := BBDate,
-                                  PLUS a manufactured Inactive placeholder ("Unknown" bank) for any
-                                  export account not in the base — so 100% of LP records seed (no rejects)
+  * facilities.csv              - the Agent Bank Summary report + bank_status Active/Inactive +
+                                  collateral_date := BBDate, PLUS a manufactured Inactive placeholder
+                                  ("Unknown" bank) for any export account the report does not list —
+                                  so 100% of LP records seed (no rejects)
   No review reports and no summary file are written: data/out/ holds only what pe-sub-jobs ingests.
   The run's counts (unmatched Investor Types / Agent LP Categories, UBS classification mix, matrix
   variance) are still computed and printed to the console.
@@ -38,9 +44,10 @@ Design decisions this script implements (LP_DB_EXTRACT_DESIGN.md):
       (facility-level AccountID/FndName/BBDate excluded), matching the full lp_records insert.
       ubs_cls is derived per row from that row's attributes via reference/bb_criteria_matrix.csv.
       LP Master still holds the consolidated golden profile, used only as fallback for blanks.
-  D3  facilities matched on AccountID: an existing facility whose account is in the export -> Active
-      (else Inactive). An export account with NO existing facility -> a manufactured "Unknown"-bank
-      Inactive placeholder, so its LP records still seed (100% insertion; no rejects).
+  D3  facilities matched on AccountID: a facility from the Agent Bank Summary whose account is in
+      the export -> Active (else Inactive) — this match-derived value OVERRIDES the report's own
+      FacilityStatus column. An export account with NO facility in the report -> a manufactured
+      "Unknown"-bank Inactive placeholder, so its LP records still seed (100% insertion; no rejects).
   D4  AccountID is the join key. Real data is 1:1 (AccountID<->fund); a duplicate FndName across
       orphan accounts (a sim artifact) is disambiguated with the AccountID to keep names unique.
   D6  LP Master is cleared and repopulated with one distinct LP per investor_name, each field
@@ -88,7 +95,7 @@ import re
 import sys
 from collections import Counter, OrderedDict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -114,7 +121,10 @@ DATA_DIR = JOBS_ROOT / "data"
 EXPORT_FILE = DATA_DIR / "import" / "LP DB Export 2026.06.25.xlsx"
 
 # Stable defaults (rarely changed) — all within the pe-sub-jobs project:
-FACILITIES_FILE = DATA_DIR / "mock" / "facilities.csv"  # base list, read-only
+# The Agent Bank Summary report is the ORIGINAL SOURCE for loan-level facility attributes (agent
+# bank, loan amount, maturity date, agent-reported status). Read-only; parsed by
+# read_agent_bank_summary, which copes with the report's banded layout and its dirty rows.
+AGENT_BANK_SUMMARY_FILE = DATA_DIR / "import" / "AgentBankSummaryRpt.xlsx"
 OUT_DIR = DATA_DIR / "out"              # ALL outputs land here; never writes into the app tree
 REFERENCE_DIR = DATA_DIR / "reference"  # Config-seeded normalization lists
 
@@ -150,6 +160,14 @@ FACILITY_COLS = [
     "agent_bank", "name", "account_number", "loan_amount", "maturity_date", "bank_status",
     "bank_status_date", "ubs_participation", "collateral_date",
 ]
+
+# Agent Bank Summary report column layout (must match the report header exactly). Index 4 is an
+# unnamed spacer the report uses to hold its subtotal amounts, so it carries no header label.
+ABS_COLS = [
+    "Agent", "Borrower", "AccountNumber", "LoanAmount", "", "MaturityDate",
+    "FacilityStatus", "FacilityStatusDate",
+]
+ABS_TOTAL_MARKER = "accesstotalsloanamount"  # _norm() prefix of the subtotal / grand-total rows
 
 
 # --- formatting helpers --------------------------------------------------------------------
@@ -217,9 +235,15 @@ def money_short(v) -> str:
 
 
 def iso_date(v) -> str:
-    """Parse the export's M/D/YYYY BBDate to ISO (YYYY-MM-DD); '' if unparseable."""
+    """Parse a feed date to ISO (YYYY-MM-DD); '' if unparseable. The LP DB Export carries text
+    dates (M/D/YYYY BBDate); the Agent Bank Summary carries real Excel dates, which openpyxl
+    hands back as datetime objects — take those directly rather than round-tripping the string."""
     if blank(v):
         return ""
+    if isinstance(v, datetime):
+        return v.date().isoformat()
+    if isinstance(v, date):
+        return v.isoformat()
     s = str(v).strip()
     for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m/%d/%y"):
         try:
@@ -543,16 +567,89 @@ def read_export(path: Path, sheet: str | None = None) -> list[dict]:
     return [dict(zip(SRC_COLS, r)) for r in rows_iter]
 
 
-def read_facilities(path: Path) -> tuple[list[list[str]], dict[str, int]]:
-    """Return (raw data rows, account_number -> row index)."""
-    with path.open(newline="", encoding="utf-8") as fh:
-        rows = list(csv.reader(fh))
-    data = rows[1:]  # drop header (regenerated on write)
-    by_acct = {}
-    for i, r in enumerate(data):
-        if r and r[0].strip():  # non-empty agent_bank => real facility row
-            by_acct[r[2].strip()] = i
-    return data, by_acct
+def read_agent_bank_summary(path: Path) -> tuple[list[list[str]], dict[str, int], Counter]:
+    """Read the Agent Bank Summary report — the ORIGINAL SOURCE for loan-level facility attributes
+    — into FACILITY_COLS-shaped rows. Returns (rows, account_number -> row index, counts).
+
+    The report is a banded print layout, not a flat table:
+      * the agent bank appears once on its own group-header row (Agent set, Borrower blank) and is
+        CARRIED DOWN onto every facility row beneath it, which leave the Agent cell blank;
+      * each group ends with an 'AccessTotalsLoanAmount:' subtotal row (and the sheet with a grand
+        total) that carries no facility — those are skipped.
+
+    Dirty input is expected, not exceptional (D10) — the report is an operational extract, so:
+      * a row repeating an (AccountNumber, Borrower) pair already seen is a reprint and is dropped;
+      * a Borrower name already taken by a DIFFERENT account is disambiguated with its AccountID,
+        because facility identity is the name (D4) — same convention upsert_facilities uses;
+      * one AccountNumber listed against two different borrowers keeps the FIRST row as the owner
+        of the LP join; the later row survives as its own facility but matches no export rows.
+    All four are counted and reported on the console rather than aborting the run.
+
+    Two FACILITY_COLS fields are not in the report: ubs_participation (never reported by the agent
+    bank — left blank, which the ingest maps to null) and collateral_date (filled from the LP DB
+    Export's BBDate by upsert_facilities). bank_status/bank_status_date are taken from the report's
+    FacilityStatus columns, but D3 then overrides bank_status with the export-match result."""
+    if not path.is_file():
+        raise SystemExit(
+            f"Agent Bank Summary report not found: {path}\n"
+            "It is the source of every facility's agent bank, loan amount, maturity date and "
+            "agent-reported status. Drop it in pe-sub-jobs/data/import/, or edit the "
+            "AGENT_BANK_SUMMARY_FILE variable near the top of this script, then re-run."
+        )
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    ws = wb[wb.sheetnames[0]]
+    rows_iter = ws.iter_rows(values_only=True)
+    header = [as_is(c) for c in next(rows_iter)]
+    if header[: len(ABS_COLS)] != ABS_COLS:
+        raise SystemExit(
+            f"Agent Bank Summary header in '{ws.title}' does not match the expected schema.\n"
+            f"  expected: {ABS_COLS}\n  found:    {header}"
+        )
+
+    counts: Counter = Counter()
+    data: list[list[str]] = []
+    by_acct: dict[str, int] = {}
+    seen_pair: set[tuple[str, str]] = set()
+    used_norm: set[str] = set()
+    agent = ""
+
+    for raw in rows_iter:
+        cells = (list(raw) + [None] * len(ABS_COLS))[: len(ABS_COLS)]
+        text = [as_is(c) for c in cells]
+        if not any(text):
+            continue
+        if _norm(text[3]).startswith(ABS_TOTAL_MARKER):   # subtotal / grand-total band
+            counts["total_rows"] += 1
+            continue
+        if text[0] and not text[1]:                       # agent group header -> carry down
+            agent = text[0]
+            counts["agents"] += 1
+            continue
+        name, acct = text[1], text[2]
+        if not name or not acct:
+            counts["skipped_incomplete"] += 1
+            continue
+        if (acct, _norm(name)) in seen_pair:              # reprint of a row already taken
+            counts["duplicate_row"] += 1
+            continue
+        seen_pair.add((acct, _norm(name)))
+        if _norm(name) in used_norm:
+            name = f"{name} ({acct})"
+            counts["renamed_duplicate_name"] += 1
+        used_norm.add(_norm(name))
+        # agent_bank, name, account_number, loan_amount, maturity_date, bank_status,
+        # bank_status_date, ubs_participation, collateral_date
+        # The row's own Agent cell wins if the report ever fills it; otherwise the carried-down
+        # group header. "Unknown" keeps FacilityRowProcessor's non-blank agent_bank rule satisfied.
+        data.append([text[0] or agent or "Unknown", name, acct, text[3], iso_date(cells[5]),
+                     text[6], iso_date(cells[7]), "", ""])
+        if acct in by_acct:
+            counts["duplicate_account"] += 1               # first row keeps the LP join
+        else:
+            by_acct[acct] = len(data) - 1
+        counts["facilities"] += 1
+
+    return data, by_acct, counts
 
 
 @dataclass
@@ -773,9 +870,10 @@ def build_seed(export: list[dict], name_by_acct: dict[str, str], ref: Reference)
 
 def upsert_facilities(fac_data: list[list[str]], by_acct: dict[str, int],
                       export: list[dict]) -> tuple[list[list[str]], Counter, dict[str, str]]:
-    """Existing facilities: bank_status := Active if the account appears in the export else
-    Inactive (Active also gets collateral_date := BBDate). Export accounts NOT in facilities.csv
-    are MANUFACTURED as placeholder Inactive facilities ("Unknown" bank, name=FndName,
+    """Facilities from the Agent Bank Summary: bank_status := Active if the account appears in the
+    export else Inactive (Active also gets collateral_date := BBDate) — this OVERRIDES the report's
+    own FacilityStatus. Export accounts NOT listed in the report are MANUFACTURED as placeholder
+    Inactive facilities ("Unknown" bank, name=FndName,
     account_number=AccountID, collateral_date=BBDate) so every LP record can seed — no rejects.
     Returns (rows, counts, account_number -> resolved facility name) for the seed to reuse."""
     bbdate_by_acct: "OrderedDict[str, str]" = OrderedDict()
@@ -791,10 +889,13 @@ def upsert_facilities(fac_data: list[list[str]], by_acct: dict[str, int],
     name_by_acct: dict[str, str] = {}
     used_norm = {_norm(r[1]) for r in out if len(r) > 1 and r[1].strip()}
 
-    # 1) Existing facilities -> Active/Inactive.
+    # 1) Reported facilities -> Active/Inactive. Status is resolved PER ROW off that row's own
+    #    account, so where the report lists one account against two borrowers both rows follow
+    #    that account; only the owning row (by_acct) lends its name to the LP seeds.
     for acct, idx in by_acct.items():
-        row = out[idx]
-        name_by_acct[acct] = row[1].strip()
+        name_by_acct[acct] = out[idx][1].strip()
+    for row in out:
+        acct = row[2].strip()
         if acct in bbdate_by_acct:
             row[5] = "Active"
             if bbdate_by_acct[acct]:
@@ -843,18 +944,17 @@ def main() -> int:
     # No command-line arguments: the run is configured by the EXPORT_FILE variable near the top of
     # this file (edit it, then re-run). All outputs go to OUT_DIR; the app tree is never modified.
     export_path = Path(EXPORT_FILE)
-    fac_path = Path(FACILITIES_FILE)
+    abs_path = Path(AGENT_BANK_SUMMARY_FILE)
     out_dir = Path(OUT_DIR)
     ref_dir = Path(REFERENCE_DIR)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    if not fac_path.is_file():
-        raise SystemExit(f"Base facilities.csv not found: {fac_path}  (edit FACILITIES_FILE)")
-
     print(f"Source: {export_path}")
+    print(f"        {abs_path}")
     ref = load_references(ref_dir)
+    # Small file first, so a missing/renamed report fails before the big export is parsed.
+    fac_data, by_acct, abs_counts = read_agent_bank_summary(abs_path)
     export = read_export(export_path)
-    fac_data, by_acct = read_facilities(fac_path)
 
     # Facilities first: this manufactures placeholder facilities for orphan accounts and returns
     # the account -> facility name map the seed uses, so every LP record resolves to a facility.
@@ -890,11 +990,20 @@ def main() -> int:
         "LP DB Export -> seed extract — run summary",
         f"generated           : {generated}",
         f"source export       : {export_path}",
-        f"base facilities.csv : {fac_path}",
+        f"agent bank summary  : {abs_path}",
         f"reference dir       : {ref_dir}",
         f"output directory    : {out_dir}",
         "",
         f"export rows read              : {len(export)}",
+        f"agent bank summary read       : {abs_counts['facilities']} facilities "
+        f"under {abs_counts['agents']} agent bank(s)",
+        f"  dropped: subtotal rows      : {abs_counts['total_rows']} (AccessTotalsLoanAmount bands)",
+        f"  dropped: reprinted rows     : {abs_counts['duplicate_row']} (same account + borrower)",
+        f"  dropped: incomplete rows    : {abs_counts['skipped_incomplete']} (no borrower or no account)",
+        f"  renamed: duplicate names    : {abs_counts['renamed_duplicate_name']} "
+        f"(name reused by another account - suffixed with its AccountNumber)",
+        f"  accounts listed twice       : {abs_counts['duplicate_account']} "
+        f"(2nd borrower on an account; 1st row owns the LP join)",
         f"lp_master.csv (distinct LPs)  : {len(mr.rows)}",
         f"lp_facility_seeds.csv (rows)  : {sr.counts['written']}",
         f"  skipped: duplicate pair     : {sr.counts['skipped_duplicate_pair']} (same LP in same facility)",

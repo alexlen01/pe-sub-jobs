@@ -86,7 +86,7 @@ All three jobs run automatically once the application is up, in sequence:
 The seed job runs **after** facilities and LP Master because the API resolves its rows against both. Each job logs `status / readCount / writeCount / skipCount` on completion. A failure on one job is caught and logged; the remaining jobs still run. The skip limit per job is 10 rows — exceeding it marks that job `FAILED`. Before any job runs, startup waits for `pe-sub-api` to answer `GET /api/ping` (it only serves once its Flyway migrations are done); if it never does within the timeout, the startup feeds are skipped with a warning.
 
 `cls-conc-limits-ingest` runs at startup **only when** `ingest.cls-conc-limits-file`
-(env `CLS_CONC_LIMITS_FILE`) is set — the API's `V1_5` migration already seeds defaults,
+(env `CLS_CONC_LIMITS_FILE`) is set — the API's `V1_3__config.sql` migration already seeds defaults,
 so an unconfigured feed is skipped with a log line rather than re-fed on every boot.
 
 Startup ingest is controlled by `ingest.run-on-startup` (default `true`; env `INGEST_RUN_ON_STARTUP`).
@@ -103,14 +103,36 @@ Development seed files are in `data/mock/`:
 
 | File | Contents |
 |---|---|
-| `data/mock/facilities.csv` | 65 facilities derived from the Agent Bank Summary workbook |
-| `data/mock/lp_master.csv` | 30 LP Master records across all classification tiers |
-| `data/mock/lp_facility_seeds.csv` | 42 LP-to-facility assignments across 5 active facilities |
-| `data/mock/cls_conc_limit_defaults.csv` | Reference feed for `cls-conc-limits-ingest` — 6 classification labels seeded to the upper bound of each `Concentration_Limits.xls` range (Excluded = 0) |
+| `data/mock/facilities.csv` | 68 facilities, a hand-cleaned derivative of the Agent Bank Summary workbook. No longer an input to `lp_db_extract.py` (which now reads the report directly), but still the facility list `scripts/lp_db_generate.py` builds its simulated export around |
+| `data/mock/lp_master.csv` | 37 LP Master records, at least one per UBS LP Category (all nine of `classification_config.UBS_CLS_OPTS`) |
+| `data/mock/lp_facility_seeds.csv` | 50 LP-to-facility assignments across 5 active facilities, on the full 31-column feed. Every UBS LP Category and every one of the five `AGENT_CLS_OPTS` agent categories appears, and three rows sit below the 40% funded split so the matrix's `lt40` advance rates are exercised too |
+| `data/mock/cls_conc_limit_defaults.csv` | Reference feed for `cls-conc-limits-ingest` — all nine classification labels seeded to the upper bound of each `Concentration_Limits.xls` range (Excluded = 0), mirroring the API's `cls_conc_limit_defaults` config key |
+
+Unlike the chaos-degraded extract output in `data/out/`, the mock files are the **clean**
+fixture: every categorical value is a canonical `classification_config` option
+(`UBS_CLS_OPTS`, `AGENT_CLS_OPTS`, `REGION_OPTS`, `INVESTOR_TYPE_OPTS`, the rating option
+lists — `''`, never `NR`, for unrated), and both concentration-limit columns carry an
+explicit `%`. That last point matters: `MoneyValues.concLimit` tells a percentage from a
+dollar cap by magnitude, so a bare `0.05` would be stored as 0.05%, not 5%. The per-LP
+`ubs_concentration_limit` / `ubs_advance_rate` on the seeds are the `bb_criteria_matrix`
+values for that row's category (rating-band aware for Rated Investors, funded-split on the
+row's own called %), so the seeded figures agree with what Run Shadow BB recomputes; the
+LP Master `ubs_default_*` columns carry the funded-independent `UBS_CLS_DEFAULT_RATE` /
+`cls_conc_limit_defaults` values instead. The `agent_*` columns are deliberately the agent
+bank's own, diverging figures — that variance is what the platform measures.
 
 `lp_facility_seeds.csv` links LP Master records to specific facilities, producing `lp_records` rows the same way the ingestion wizard would. Since the D2 revision (see `pe-sub-docs/LP_DB_EXTRACT_DESIGN.md`) each seed row carries the **full per-LP column set** of the LP DB Export (31 columns: the legacy 7 first, then parent, spv, high_qty, investor_type, inst_vs_hnw, region_location, investment_grade, ubs_cls, sp, mdy, fitch, aum, nav, pension, pension_funded, pct_cap_commit, called_cap, pct_uncalled, pct_called, ubs_conc, ubs_rate, agent_bb, ubs_bb, notes) — `ubs_cls` is derived per row from that row's attributes (ratings, pension assets, NAV, AUM, HNW/SPV flags) via the Borrowing Base Criteria Matrix (`data/reference/bb_criteria_matrix.csv`, transcribed from `pe-sub-docs/BB_CRITERIA_DESIGN.md`), and the row's UBSAR/AgentAR advance rates are slotted into the discrete 90/75/65/50/0 rate groups by the Floor Map (`data/reference/rate_floor_map.csv`). Row values win server-side; the LP Master profile only fills blanks, and a legacy 7-column file still parses (the reader is non-strict and pads blanks). The API inserts a row only when that (facility, investor) pair has none yet — `lp_records` intentionally has **no** unique constraint on the pair (multi-sleeve) — so re-running is a safe no-op that never overwrites records committed through the Shadow BB flow. The startup defaults point at the extract output in `data/out/` (see `ingest.*` properties below).
 
-The extract's input is the simulated, date-stamped LP DB Export produced by `scripts/lp_db_generate.py` into `data/import/`. The generator's built-in **chaos monkey** (`CHAOS_ENABLED`/`CHAOS_SEED` tunables; see `pe-sub-docs/"AI Chaos Monkey for Data Quality.md"`) degrades the values written to the XLSX to realistic manual-entry quality — name drift, `A minus` ratings, unit mix-ups, NAV range strings, categorical drift — while leaving cash/identity columns pristine, and summarizes every mutation (count per column and per pattern) on the console — the export XLSX is the only file it writes, and re-running with the same `CHAOS_SEED` reproduces the identical degradation. `lp_db_extract.py` reads whatever file it is given **as-is** (no cleaning toggle), the same posture it needs for a real export; it writes **only** the three ingestion CSVs into `data/out/` (`lp_master.csv`, `lp_facility_seeds.csv`, `facilities.csv`) and prints its unmatched/variance counts — including each unmatched Investor Type / Agent LP Category with a fuzzy suggestion — to the console instead of report files.
+The extract takes **two** inputs, both in `data/import/`:
+
+| Input | Variable | Role |
+|---|---|---|
+| `LP DB Export <date>.xlsx` | `EXPORT_FILE` | The LP-level export — one row per (facility, investor). Drives `lp_master.csv` and `lp_facility_seeds.csv`, and supplies `collateral_date` (`:= BBDate`). |
+| `AgentBankSummaryRpt.xlsx` | `AGENT_BANK_SUMMARY_FILE` | The **original source** for loan-level facility attributes — agent bank, loan amount, maturity date, agent-reported status. Drives `facilities.csv`. |
+
+The Agent Bank Summary is a banded print layout, not a flat table: the agent bank sits on its own group-header row and is carried down onto the facility rows beneath it, and each group closes with an `AccessTotalsLoanAmount:` subtotal row. `read_agent_bank_summary` carries the agent down, skips the subtotal/grand-total bands, drops reprinted rows (same account + borrower), suffixes a borrower name reused by a different account with its `AccountNumber` (facility identity is the name, D4), and counts each of those on the console. Two `facilities.csv` columns are not in the report: `ubs_participation` — never reported by the agent bank, so it is written **blank** (the ingest maps it to `null`) — and `collateral_date`, which comes from the export's `BBDate`. Per D3, `bank_status` is match-derived (Active if the account appears in the export, else Inactive) and **overrides** the report's own `FacilityStatus`; export accounts the report does not list become `"Unknown"`-bank Inactive placeholders so no LP record is rejected.
+
+The LP-level input is the simulated, date-stamped LP DB Export produced by `scripts/lp_db_generate.py` into `data/import/`. The generator's built-in **chaos monkey** (`CHAOS_ENABLED`/`CHAOS_SEED` tunables; see `pe-sub-docs/"AI Chaos Monkey for Data Quality.md"`) degrades the values written to the XLSX to realistic manual-entry quality — name drift, `A minus` ratings, unit mix-ups, NAV range strings, categorical drift — while leaving cash/identity columns pristine, and summarizes every mutation (count per column and per pattern) on the console — the export XLSX is the only file it writes, and re-running with the same `CHAOS_SEED` reproduces the identical degradation. `lp_db_extract.py` reads whatever file it is given **as-is** (no cleaning toggle), the same posture it needs for a real export; it writes **only** the three ingestion CSVs into `data/out/` (`lp_master.csv`, `lp_facility_seeds.csv`, `facilities.csv`) and prints its unmatched/variance counts — including each unmatched Investor Type / Agent LP Category with a fuzzy suggestion — to the console instead of report files.
 
 ## Getting started
 
@@ -120,7 +142,17 @@ The extract's input is the simulated, date-stamped LP DB Export produced by `scr
 mvn spring-boot:run
 ```
 
-On startup the app waits for `pe-sub-api` to answer `/api/ping`, then runs the ingest jobs against the mock data files. No database is required.
+On startup the app waits for `pe-sub-api` to answer `/api/ping`, then runs the ingest jobs against
+the `ingest.*` paths, which default to the extract output in `data/out/`. No database is required.
+To boot against the mock fixtures instead, point the three paths at `data/mock/`:
+
+```bash
+FACILITY_INGEST_FILE=data/mock/facilities.csv \
+LP_MASTER_INGEST_FILE=data/mock/lp_master.csv \
+LP_FACILITY_SEEDS_FILE=data/mock/lp_facility_seeds.csv \
+CLS_CONC_LIMITS_FILE=data/mock/cls_conc_limit_defaults.csv \
+mvn spring-boot:run
+```
 
 ## REST API
 

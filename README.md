@@ -56,8 +56,33 @@ ubs_classification, ubs_default_adv_rate, ubs_default_conc_limit, notes
 
 Reads a CSV of per-classification concentration-limit defaults and merges it via
 `PATCH /api/config/cls-conc-limit-defaults` into the `cls_conc_limit_defaults` config map —
-the same map edited on the UI's Config screen (Per-LP Concentration Limit Defaults card) and
-used by the BB engine's fallback chain (per-LP limit → class default → facility limit).
+the same map edited on the UI's Config screen (Per-LP Concentration Limit Defaults card).
+
+**This job no longer feeds the borrowing base.** `bb_criteria_matrix` is the PE Sub team's
+authoritative source for the UBS advance rate and concentration limit, and it is what
+`BbCalculationService.perLpConc` resolves against: explicit per-LP limit → matrix default
+(rating-band aware for Rated Investors) → facility limit. There is no class-default step in
+that chain any more (asserted by pe-sub-api's `PerLpConcentrationLimitIntegrationTest`).
+`cls_conc_limit_defaults` survives only as UI pre-fill — the LP-record form's suggested value
+and the agent-side class default in `RunShadowBB` — so the config key and this job stay
+available, but no fixture feed ships with the repo. The matrix supplements what
+`V1_3__config.sql` seeds at DB install; feed this job only to override a class default
+deliberately.
+
+Because the two tables were maintained separately they still disagree, and the matrix wins
+wherever the borrowing base is concerned:
+
+| UBS LP Category | `cls_conc_limit_defaults` | `bb_criteria_matrix` |
+|---|---|---|
+| Rated Investor | 20% flat | 25 / 20 / 15 / 10% by rating band |
+| Corp Pension > $5Bn Assets | 12.5% | 25% |
+| Other Institutional | 7.5% | 5% |
+
+`UBS_CLS_DEFAULT_RATE` / `BUSA_RATE_MAP` likewise disagree with the matrix on the advance rate
+for Corp Pension > $5Bn Assets (65% vs 90%), Unrated NAV > $1Bn (75% vs 90%) and Other
+Institutional (50% vs 65/50%), because those maps are funded-independent while the matrix
+splits at 40% called. Reconciling them is still open — a class whose form pre-fill differs from
+what the engine computes will read as a bug to an analyst.
 
 **CSV columns (header row required):**
 
@@ -87,7 +112,9 @@ The seed job runs **after** facilities and LP Master because the API resolves it
 
 `cls-conc-limits-ingest` runs at startup **only when** `ingest.cls-conc-limits-file`
 (env `CLS_CONC_LIMITS_FILE`) is set — the API's `V1_3__config.sql` migration already seeds defaults,
-so an unconfigured feed is skipped with a log line rather than re-fed on every boot.
+so an unconfigured feed is skipped with a log line rather than re-fed on every boot. Nothing in
+`data/mock/` sets it: the map it writes to no longer drives the borrowing base (see above), so
+there is no dev fixture for it and the normal state is skipped.
 
 Startup ingest is controlled by `ingest.run-on-startup` (default `true`; env `INGEST_RUN_ON_STARTUP`).
 Set it to `false` to skip the seed jobs on boot — for example when `pe-sub-api` is not running,
@@ -106,20 +133,29 @@ Development seed files are in `data/mock/`:
 | `data/mock/facilities.csv` | 68 facilities, a hand-cleaned derivative of the Agent Bank Summary workbook. No longer an input to `lp_db_extract.py` (which now reads the report directly), but still the facility list `scripts/lp_db_generate.py` builds its simulated export around |
 | `data/mock/lp_master.csv` | 37 LP Master records, at least one per UBS LP Category (all nine of `classification_config.UBS_CLS_OPTS`) |
 | `data/mock/lp_facility_seeds.csv` | 50 LP-to-facility assignments across 5 active facilities, on the full 31-column feed. Every UBS LP Category and every one of the five `AGENT_CLS_OPTS` agent categories appears, and three rows sit below the 40% funded split so the matrix's `lt40` advance rates are exercised too |
-| `data/mock/cls_conc_limit_defaults.csv` | Reference feed for `cls-conc-limits-ingest` — all nine classification labels seeded to the upper bound of each `Concentration_Limits.xls` range (Excluded = 0), mirroring the API's `cls_conc_limit_defaults` config key |
+
+There is deliberately **no** `cls_conc_limit_defaults.csv` fixture: `bb_criteria_matrix` is the
+authoritative source for the UBS advance rate and concentration limit, so that feed is obsolete
+(see [`cls-conc-limits-ingest`](#cls-conc-limits-ingest)).
 
 Unlike the chaos-degraded extract output in `data/out/`, the mock files are the **clean**
 fixture: every categorical value is a canonical `classification_config` option
 (`UBS_CLS_OPTS`, `AGENT_CLS_OPTS`, `REGION_OPTS`, `INVESTOR_TYPE_OPTS`, the rating option
 lists — `''`, never `NR`, for unrated), and both concentration-limit columns carry an
 explicit `%`. That last point matters: `MoneyValues.concLimit` tells a percentage from a
-dollar cap by magnitude, so a bare `0.05` would be stored as 0.05%, not 5%. The per-LP
-`ubs_concentration_limit` / `ubs_advance_rate` on the seeds are the `bb_criteria_matrix`
-values for that row's category (rating-band aware for Rated Investors, funded-split on the
-row's own called %), so the seeded figures agree with what Run Shadow BB recomputes; the
-LP Master `ubs_default_*` columns carry the funded-independent `UBS_CLS_DEFAULT_RATE` /
-`cls_conc_limit_defaults` values instead. The `agent_*` columns are deliberately the agent
-bank's own, diverging figures — that variance is what the platform measures.
+dollar cap by magnitude, so a bare `0.05` would be stored as 0.05%, not 5%.
+
+Every concentration limit in the fixtures comes from **`bb_criteria_matrix`**, the PE Sub team's
+authoritative source and what `BbCalculationService` resolves against — the seeds' per-LP
+`ubs_concentration_limit` and LP Master's `ubs_default_concentration_limit` are the same
+matrix value for a given LP (rating-band aware for Rated Investors), so a golden default can
+never pull the borrowing base away from the matrix. `ubs_advance_rate` on the seeds is likewise
+the matrix rate, funded-split on that row's own called %; LP Master's
+`ubs_default_advance_rate` stays on `classification_config.UBS_CLS_DEFAULT_RATE`, since an LP
+Master row has no called % to split on and that key is what the LP form pre-fills. The two
+disagree for three categories (see the note under [`cls-conc-limits-ingest`](#cls-conc-limits-ingest)).
+The `agent_*` columns are deliberately the agent bank's own, diverging figures — that variance
+is what the platform measures.
 
 `lp_facility_seeds.csv` links LP Master records to specific facilities, producing `lp_records` rows the same way the ingestion wizard would. Since the D2 revision (see `pe-sub-docs/LP_DB_EXTRACT_DESIGN.md`) each seed row carries the **full per-LP column set** of the LP DB Export (31 columns: the legacy 7 first, then parent, spv, high_qty, investor_type, inst_vs_hnw, region_location, investment_grade, ubs_cls, sp, mdy, fitch, aum, nav, pension, pension_funded, pct_cap_commit, called_cap, pct_uncalled, pct_called, ubs_conc, ubs_rate, agent_bb, ubs_bb, notes) — `ubs_cls` is derived per row from that row's attributes (ratings, pension assets, NAV, AUM, HNW/SPV flags) via the Borrowing Base Criteria Matrix (`data/reference/bb_criteria_matrix.csv`, transcribed from `pe-sub-docs/BB_CRITERIA_DESIGN.md`), and the row's UBSAR/AgentAR advance rates are slotted into the discrete 90/75/65/50/0 rate groups by the Floor Map (`data/reference/rate_floor_map.csv`). Row values win server-side; the LP Master profile only fills blanks, and a legacy 7-column file still parses (the reader is non-strict and pads blanks). The API inserts a row only when that (facility, investor) pair has none yet — `lp_records` intentionally has **no** unique constraint on the pair (multi-sleeve) — so re-running is a safe no-op that never overwrites records committed through the Shadow BB flow. The startup defaults point at the extract output in `data/out/` (see `ingest.*` properties below).
 
@@ -150,7 +186,6 @@ To boot against the mock fixtures instead, point the three paths at `data/mock/`
 FACILITY_INGEST_FILE=data/mock/facilities.csv \
 LP_MASTER_INGEST_FILE=data/mock/lp_master.csv \
 LP_FACILITY_SEEDS_FILE=data/mock/lp_facility_seeds.csv \
-CLS_CONC_LIMITS_FILE=data/mock/cls_conc_limit_defaults.csv \
 mvn spring-boot:run
 ```
 

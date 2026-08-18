@@ -48,7 +48,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent          # pe-sub-jobs/scripts/
 DATA_DIR = SCRIPT_DIR.parent / "data"                 # pe-sub-jobs/data/
 FACILITIES_FILE = DATA_DIR / "mock" / "facilities.csv"
 EXPORT_OUT = DATA_DIR / "import" / "LP DB Export 2026.08.17.xlsx"
-SHEET_NAME = "_BBs20260625"
+SHEET_NAME = "BBs"
 
 # ── tunables ────────────────────────────────────────────────────────────────
 SEED = 20260625

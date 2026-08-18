@@ -32,8 +32,6 @@ prints those counts and nothing else.
 
 Usage (no command-line arguments): edit EXPORT_FILE below, then run from any working directory:
     python pe-sub-jobs/scripts/lp_db_extract.py
-    powershell -ExecutionPolicy Bypass -File pe-sub-jobs/scripts/lp_db_extract.ps1
-    bash pe-sub-jobs/scripts/lp_db_extract.sh
 """
 from __future__ import annotations
 

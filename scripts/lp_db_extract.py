@@ -74,6 +74,69 @@ SRC_COLS = [
     "AgentCL", "UBSCL", "AgentBB", "UBSBB", "BBDate",
 ]
 
+
+# The platform's own LP Records export (pe-sub-ui/src/services/lpExportService.ts) writes these same
+# 32 columns, in this order, under readable headers - so a workbook exported from the UI can be fed
+# straight back in. Keep this map in step with that file: readable header -> LP DB Export column.
+PLATFORM_HEADERS = {
+    "Account ID": "AccountID",                     "Fund Name": "FndName",
+    "Investor Name": "InvestorName",               "Parent": "Parent",
+    "SPV": "SPV",                                  "Investor Type": "InvestorType",
+    "Region / Location": "Region",                 "High Quality": "HQ",
+    "Institutional vs HNW": "InstitutionalHNW",    "Investment Grade": "InvestmentGrade",
+    "Agent LP Classification": "Classification",   "Notes": "Notes",
+    "S&P": "SP",                                   "Moody's": "Moodys",
+    "Fitch": "Fitch",                              "AUM": "AUM",
+    "NAV": "NAV",                                  "Pension Assets": "PensionAssets",
+    "Funded Ratio (%)": "FundingRatio",            "UBS Advance Rate (%)": "UBSAR",
+    "Agent Advance Rate (%)": "AgentAR",           "Capital Commitments": "Commitments",
+    "% of Commitments": "PercentOfCommitments",    "Called Capital": "Called",
+    "Uncalled Capital": "Uncalled",                "% of Uncalled Capital": "PercentOfUncalled",
+    "% of LP Called": "CalledPercent",             "Agent Concentration Limit": "AgentCL",
+    "UBS Concentration Limit": "UBSCL",            "Agent Borrowing Base": "AgentBB",
+    "UBS Borrowing Base": "UBSBB",                 "Collateral Date": "BBDate",
+}
+
+# Mapping the header is not enough: the platform export shapes its *values* for a spreadsheet, not
+# for this feed. Percents go out as numbers under a "(%)" header (94, not 0.94) and money as display
+# strings ("$428,800,000", not 428800000), so each such column is converted back on the way in -
+# without this every rate and ratio would land 100x too big.
+PLATFORM_PERCENT_COLS = {"FundingRatio", "UBSAR", "AgentAR",
+                         "PercentOfCommitments", "PercentOfUncalled", "CalledPercent"}
+PLATFORM_MONEY_COLS = {"Commitments", "Called", "Uncalled", "AgentBB", "UBSBB"}
+# A concentration limit is either a percent of uncalled ("7.5%") or an absolute cap ("$25,000,000")
+# in the same column - the '%' sign is what tells them apart.
+PLATFORM_LIMIT_COLS = {"AgentCL", "UBSCL"}
+
+
+def _platform_number(v) -> "tuple[Decimal, bool] | None":
+    """Strip the display formatting off one cell -> (number, was_a_percent).
+    '$428,800,000' -> (428800000, False) - '7.5%' -> (7.5, True) - 94 -> (94, False).
+    None when the cell holds nothing numeric, in which case the caller keeps it verbatim."""
+    s = str(v).strip().replace(",", "").replace("$", "")
+    was_pct = s.endswith("%")
+    if was_pct:
+        s = s[:-1].strip()
+    try:
+        return Decimal(s), was_pct
+    except InvalidOperation:
+        return None
+
+
+def from_platform(col: str, v):
+    """Undo the platform export's display formatting for one cell of a mapped column."""
+    if blank(v) or col not in (PLATFORM_PERCENT_COLS | PLATFORM_MONEY_COLS | PLATFORM_LIMIT_COLS):
+        return v
+    parsed = _platform_number(v)
+    if parsed is None:
+        return v                                   # unparseable: pass through, same as a dirty feed
+    number, was_pct = parsed
+    if col in PLATFORM_PERCENT_COLS:               # 94 or '94%' -> 0.94
+        return _trim(number / 100)
+    if col in PLATFORM_LIMIT_COLS:                 # '7.5%' -> 0.075, '$25,000,000' -> 25000000
+        return _trim(number / 100 if was_pct else number)
+    return _trim(number)                           # money: '$428,800,000' -> 428800000
+
 # CSV header (column) orders required by the pe-sub-jobs FlatFileItemReaders.
 MASTER_COLS = [
     "investor_name", "parent", "spv", "high_quality", "investor_type", "institutional_or_hnw",
@@ -414,13 +477,38 @@ def read_export(path: Path, sheet: str | None = None) -> list[dict]:
             f"Sheet '{sheet}' not found in {path.name}. Available: {wb.sheetnames}"
         )
     rows_iter = ws.iter_rows(values_only=True)
-    header = list(next(rows_iter))
-    if header != SRC_COLS:
+    header = ["" if h is None else str(h).strip() for h in next(rows_iter)]
+    # Columns are addressed by name, not position: either the LP DB Export's own header or the
+    # readable one the platform's LP Records export writes (PLATFORM_HEADERS). Anything else is
+    # ignored, so an extra trailing column never breaks the read.
+    column_at: dict[str, int] = {}
+    platform_cols: set[str] = set()
+    for i, name in enumerate(header):
+        if name in SRC_COLS:
+            column_at.setdefault(name, i)
+        elif name in PLATFORM_HEADERS:
+            src = PLATFORM_HEADERS[name]
+            if src not in column_at:
+                column_at[src] = i
+                platform_cols.add(src)
+    missing = [c for c in SRC_COLS if c not in column_at]
+    if missing:
         raise SystemExit(
-            f"Export header in '{ws.title}' does not match the expected schema.\n"
-            f"  expected: {SRC_COLS}\n  found:    {header}"
+            f"""Export header in '{ws.title}' is missing {len(missing)} of the {len(SRC_COLS)} expected columns: {missing}
+  LP DB Export headers: {SRC_COLS}
+  or the platform LP Records export's readable headers: {list(PLATFORM_HEADERS)}
+  found: {header}"""
         )
-    return [dict(zip(SRC_COLS, r)) for r in rows_iter]
+    if platform_cols:
+        print(f"  header: platform LP Records export detected - {len(platform_cols)} readable "
+              f"column(s) mapped back to the LP DB Export schema, values de-formatted.")
+    rows = []
+    for r in rows_iter:
+        row = {c: (r[column_at[c]] if column_at[c] < len(r) else None) for c in SRC_COLS}
+        for c in platform_cols:
+            row[c] = from_platform(c, row[c])
+        rows.append(row)
+    return rows
 
 
 def read_agent_bank_summary(path: Path) -> tuple[list[list[str]], dict[str, int]]:

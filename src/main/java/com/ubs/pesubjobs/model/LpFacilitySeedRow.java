@@ -5,6 +5,8 @@ package com.ubs.pesubjobs.model;
  * full per-LP column set of the LP DB Export (facility-level columns excluded) so the seed
  * matches the complete lp_records insert; component names mirror pe-sub-api's LpRecordSeedRow.
  * The legacy 7 fields come first — an old 7-column file still parses (missing columns blank).
+ * high_quality is absent by design: the LP DB Export stopped carrying it, so pe-sub-api keeps
+ * its column on the schema default rather than being fed a fabricated value.
  */
 public record LpFacilitySeedRow(
         String facilityName,
@@ -16,7 +18,6 @@ public record LpFacilitySeedRow(
         String agentConcentrationLimit,
         String parent,
         String spv,
-        String highQuality,
         String investorType,
         String institutionalOrHnw,
         String regionLocation,
@@ -35,6 +36,8 @@ public record LpFacilitySeedRow(
         String pctLpCalled,
         String ubsConcentrationLimit,
         String ubsAdvanceRate,
+        String agentExcessConcentration,
+        String ubsExcessConcentration,
         String agentBorrowingBase,
         String ubsBorrowingBase,
         String notes) {}

@@ -4,7 +4,6 @@ public record ProcessedLpMaster(
         String investorName,
         String parent,
         boolean spv,
-        boolean highQuality,
         String investorType,
         String institutionalOrHnw,
         String regionLocation,

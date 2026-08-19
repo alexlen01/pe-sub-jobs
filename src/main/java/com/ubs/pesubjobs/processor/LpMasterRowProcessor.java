@@ -13,7 +13,6 @@ public class LpMasterRowProcessor implements ItemProcessor<LpMasterRow, Processe
                 item.investorName().trim(),
                 blankToNull(item.parent()),
                 parseBool(item.spv()),
-                parseBool(item.highQuality()),
                 blankToNull(item.investorType()),
                 blankToNull(item.institutionalOrHnw()),
                 blankToNull(item.regionLocation()),

@@ -40,11 +40,13 @@ class SeedAndConfigJobsTest extends IntegrationTestBase {
 
     @Test
     void lpRecordsSeed_postsRawFeedRowsVerbatim() throws Exception {
-        // Row 1 is a full 31-column row; row 2 is a legacy 7-column row, which the non-strict
+        // Row 1 is a full 32-column row; row 2 is a legacy 7-column row, which the non-strict
         // tokenizer pads with blanks (the API then falls back to LP Master for those fields).
+        // high_quality is gone from the feed (the LP DB Export dropped it) and the two
+        // excess-concentration columns arrived with the 2026-08-18 format.
         JobExecution execution = run(lpRecordsSeedJob, """
-                "facility_name","investor_name","capital_commitment","uncalled_capital","agent_lp_category","agent_advance_rate","agent_concentration_limit","parent","spv","high_quality","investor_type","institutional_or_hnw","region_location","investment_grade","ubs_lp_category","sp_rating","moodys_rating","fitch_rating","aum","nav","pension_assets","funding_ratio","pct_of_fund_commitments","called_capital","pct_of_fund_uncalled","pct_lp_called","ubs_concentration_limit","ubs_advance_rate","agent_borrowing_base","ubs_borrowing_base","notes"
-                "Carlyle Buyout Umbrella","Acme Pension Fund","$250M","$75M","Rated Included","90%","5%","Acme Holdings","FALSE","TRUE","Pension Fund","Institutional","United States","TRUE","Rated Investor","AA","Aa2","AA","$10B","$8B","$9B","105%","3%","$175M","2%","70%","4%","90%","$67.5M","$67.5M","seed note"
+                "facility_name","investor_name","capital_commitment","uncalled_capital","agent_lp_category","agent_advance_rate","agent_concentration_limit","parent","spv","investor_type","institutional_or_hnw","region_location","investment_grade","ubs_lp_category","sp_rating","moodys_rating","fitch_rating","aum","nav","pension_assets","funding_ratio","pct_of_fund_commitments","called_capital","pct_of_fund_uncalled","pct_lp_called","ubs_concentration_limit","ubs_advance_rate","agent_excess_concentration","ubs_excess_concentration","agent_borrowing_base","ubs_borrowing_base","notes"
+                "Carlyle Buyout Umbrella","Acme Pension Fund","$250M","$75M","Rated Included","90%","5%","Acme Holdings","FALSE","Pension Fund","Institutional","United States","TRUE","Rated Investor","AA","Aa2","AA","$10B","$8B","$9B","105%","3%","$175M","2%","70%","4%","90%","$2.5M","$1.5M","$67.5M","$67.5M","seed note"
                 "KKR Ascendant","Beta Capital LLC","$100M","$40M","Designated","50%","15%"
                 """);
 
@@ -62,7 +64,6 @@ class SeedAndConfigJobsTest extends IntegrationTestBase {
         assertThat(full.agentLpCategory()).isEqualTo("Rated Included");
         assertThat(full.parent()).isEqualTo("Acme Holdings");
         assertThat(full.spv()).isEqualTo("FALSE");
-        assertThat(full.highQuality()).isEqualTo("TRUE");
         assertThat(full.investorType()).isEqualTo("Pension Fund");
         assertThat(full.institutionalOrHnw()).isEqualTo("Institutional");
         assertThat(full.regionLocation()).isEqualTo("United States");
@@ -81,6 +82,8 @@ class SeedAndConfigJobsTest extends IntegrationTestBase {
         assertThat(full.pctLpCalled()).isEqualTo("70%");
         assertThat(full.ubsConcentrationLimit()).isEqualTo("4%");
         assertThat(full.ubsAdvanceRate()).isEqualTo("90%");
+        assertThat(full.agentExcessConcentration()).isEqualTo("$2.5M");
+        assertThat(full.ubsExcessConcentration()).isEqualTo("$1.5M");
         assertThat(full.agentBorrowingBase()).isEqualTo("$67.5M");
         assertThat(full.ubsBorrowingBase()).isEqualTo("$67.5M");
         assertThat(full.notes()).isEqualTo("seed note");

@@ -1,0 +1,17 @@
+## Agent advance rate by Agent LP Classification. The LP DB Export stopped carrying an "Agent
+## Advance Rate" column (2026-08-18 format change), so the rate is resolved from the row's Agent LP
+## Classification instead of read from the feed. Rates MUST mirror
+## classification_config.AGENT_RATE_MAP (pe-sub-api V1_3__config.sql). Keep in sync with Config.
+##
+## These rates are used AS WRITTEN and are deliberately NOT put through rate_floor_map.csv: that
+## floor map exists to tame a dirty fed rate (0.93 -> the 90 group), whereas a value here is already
+## canonical. Flooring it would turn Designated Institutional's 60% into 50%, because 60 is not one
+## of the 90/75/65/50/0 groups the UBS side uses. Edit a rate here and the seed carries it verbatim.
+## NOTE: BB_CRITERIA_DESIGN's business figures for the agent side (95/75/75/-/0) disagree with the
+## config values below; config wins here because it is what Run Shadow BB resolves against.
+agent_lp_category,rate_pct
+Rated Included,90
+Non-Rated Included,75
+Designated Institutional,60
+Designated PWM,50
+Ineligible Investor,0

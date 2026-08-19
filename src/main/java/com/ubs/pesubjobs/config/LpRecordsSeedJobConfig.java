@@ -62,10 +62,12 @@ public class LpRecordsSeedJobConfig {
                 .lineTokenizer(CsvLineTokenizers.lenientQuotedCsvTokenizer(
                         "facilityName", "investorName", "capitalCommitment", "uncalledCapital",
                         "agentLpCategory", "agentAdvanceRate", "agentConcentrationLimit",
-                        "parent", "spv", "highQuality", "investorType", "institutionalOrHnw",
+                        "parent", "spv", "investorType", "institutionalOrHnw",
                         "regionLocation", "investmentGrade", "ubsLpCategory", "spRating", "moodysRating", "fitchRating",
                         "aum", "nav", "pensionAssets", "fundingRatio", "pctOfFundCommitments", "calledCapital",
-                        "pctOfFundUncalled", "pctLpCalled", "ubsConcentrationLimit", "ubsAdvanceRate", "agentBorrowingBase", "ubsBorrowingBase",
+                        "pctOfFundUncalled", "pctLpCalled", "ubsConcentrationLimit", "ubsAdvanceRate",
+                        "agentExcessConcentration", "ubsExcessConcentration",
+                        "agentBorrowingBase", "ubsBorrowingBase",
                         "notes"))
                 .fieldSetMapper(fs -> new LpFacilitySeedRow(
                         fs.readString("facilityName"),
@@ -77,7 +79,6 @@ public class LpRecordsSeedJobConfig {
                         fs.readString("agentConcentrationLimit"),
                         fs.readString("parent"),
                         fs.readString("spv"),
-                        fs.readString("highQuality"),
                         fs.readString("investorType"),
                         fs.readString("institutionalOrHnw"),
                         fs.readString("regionLocation"),
@@ -96,6 +97,8 @@ public class LpRecordsSeedJobConfig {
                         fs.readString("pctLpCalled"),
                         fs.readString("ubsConcentrationLimit"),
                         fs.readString("ubsAdvanceRate"),
+                        fs.readString("agentExcessConcentration"),
+                        fs.readString("ubsExcessConcentration"),
                         fs.readString("agentBorrowingBase"),
                         fs.readString("ubsBorrowingBase"),
                         fs.readString("notes")))

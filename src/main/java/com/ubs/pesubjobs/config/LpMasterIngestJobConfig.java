@@ -79,7 +79,7 @@ public class LpMasterIngestJobConfig {
                 .resource(new FileSystemResource(filePath))
                 .linesToSkip(1)
                 .lineTokenizer(CsvLineTokenizers.lenientQuotedCsvTokenizer(
-                        "investorName", "parent", "spv", "highQuality", "investorType",
+                        "investorName", "parent", "spv", "investorType",
                         "institutionalOrHnw", "regionLocation", "investmentGrade", "spRating", "moodysRating",
                         "fitchRating", "aum", "nav", "pensionAssets", "fundingRatio",
                         "ubsLpCategory", "ubsDefaultAdvanceRate", "ubsDefaultConcentrationLimit", "notes"))
@@ -87,7 +87,6 @@ public class LpMasterIngestJobConfig {
                         fs.readString("investorName"),
                         fs.readString("parent"),
                         fs.readString("spv"),
-                        fs.readString("highQuality"),
                         fs.readString("investorType"),
                         fs.readString("institutionalOrHnw"),
                         fs.readString("regionLocation"),

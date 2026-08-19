@@ -4,7 +4,6 @@ public record LpMasterRow(
         String investorName,
         String parent,
         String spv,
-        String highQuality,
         String investorType,
         String institutionalOrHnw,
         String regionLocation,

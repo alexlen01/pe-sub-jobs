@@ -1,0 +1,43 @@
+## UBS LP Classification (the export's "UBS LP Classification" column) -> canonical UBS LP Category.
+## The export now states this classification outright, so the extract no longer derives it from
+## ratings / pension assets / NAV / AUM — it only normalizes what the feed says.
+##
+## The `canonical` value MUST be one of classification_config.UBS_CLS_OPTS (pe-sub-api
+## V1_3__config.sql) and one of the ubs_classification rows of bb_criteria_matrix.csv:
+## "Rated Investor", "Corp Pension > $5Bn Assets", "Corp Pension > $1Bn Assets",
+## "Unrated NAV > $1Bn", "FoF & Other > $10Bn AUM", "Other Institutional",
+## "HNW Feeder (acceptable)", "HNW (acceptable)", "Excluded".
+## Matching is case/punctuation-insensitive, so "corp pension > $5bn assets" and
+## "Corp Pension >$5Bn  Assets" both resolve. Unmatched raw values pass through unchanged and are
+## counted in the run's "unmatched UBS classification" report. Canonical values are listed as
+## self-aliases so an already-clean feed passes straight through. Keep in sync with Config.
+alias,canonical
+Rated Investor,Rated Investor
+Rated,Rated Investor
+Rated Included,Rated Investor
+Corp Pension > $5Bn Assets,Corp Pension > $5Bn Assets
+Corporate Pension > $5Bn Assets,Corp Pension > $5Bn Assets
+Corp Pension >5Bn,Corp Pension > $5Bn Assets
+Corp Pension > $1Bn Assets,Corp Pension > $1Bn Assets
+Corporate Pension > $1Bn Assets,Corp Pension > $1Bn Assets
+Corp Pension >1Bn,Corp Pension > $1Bn Assets
+Unrated NAV > $1Bn,Unrated NAV > $1Bn
+Unrated NAV >1Bn,Unrated NAV > $1Bn
+Unrated NAV,Unrated NAV > $1Bn
+FoF & Other > $10Bn AUM,FoF & Other > $10Bn AUM
+FoF and Other > $10Bn AUM,FoF & Other > $10Bn AUM
+FoF & Other,FoF & Other > $10Bn AUM
+Fund of Funds & Other > $10Bn AUM,FoF & Other > $10Bn AUM
+Other Institutional,Other Institutional
+Other Institutional Investor,Other Institutional
+Other Inst,Other Institutional
+HNW Feeder (acceptable),HNW Feeder (acceptable)
+HNW Feeder,HNW Feeder (acceptable)
+HNW Feeder Acceptable,HNW Feeder (acceptable)
+HNW (acceptable),HNW (acceptable)
+HNW,HNW (acceptable)
+HNW Acceptable,HNW (acceptable)
+Excluded,Excluded
+Excluded Investor,Excluded
+Ineligible,Excluded
+Ineligible Investor,Excluded

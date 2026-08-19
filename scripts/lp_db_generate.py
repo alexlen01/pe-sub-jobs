@@ -13,18 +13,26 @@ Shape of the generated data:
     from that file and exercise the extract's "Unknown" placeholder path.
   * An LP's identity, classification, ratings, scale and UBS credit profile are constant across all
     its rows; only the facility-specific financials (commitment, called/uncalled, BB) vary.
-  * Base values use the canonical Investor Type / Agent LP Category vocabularies from
+  * Base values use the canonical Agent LP Category / UBS LP Classification vocabularies from
     data/reference/, so with chaos off the extract's unmatched counts come back zero.
-  * Agency-rating presence follows the Agent LP Category (RATING_PRESENCE). classify_ubs derives
-    "Rated Investor" from any usable rating, so tying presence to the agent bucket keeps the derived
-    UBS mix near the real book's ~40% Rated and leaves unrated LPs to exercise the Corp Pension /
-    Unrated NAV / FoF / HNW / Other matrix branches.
+  * Agency-rating presence follows the Agent LP Category (RATING_PRESENCE). classify_ubs maps any
+    usable rating to "Rated Investor", so tying presence to the agent bucket keeps the UBS mix near
+    the real book's ~40% Rated and leaves unrated LPs to exercise the Corp Pension / Unrated NAV /
+    FoF / HNW / Other branches.
+  * Emits the 2026-08-18 29-column format: the UBS LP Classification is written out as its own
+    column (classify_ubs runs HERE now, on the clean values, rather than in the extract), the old
+    AUM / NAV / Pension Assets trio is replaced by one "LP Size ($ Bil)" figure plus its criteria
+    label, and Agent / UBS Excess Concentration are computed against the facility's total uncalled
+    with each borrowing base advanced only on the uncalled that stays within the cap.
 
 Chaos monkey (pe-sub-docs/"AI Chaos Monkey for Data Quality.md"): degrades the values written to
 the XLSX, per the analyst "hierarchy of care". Sacred cash/identity columns (CHAOS_SACRED) stay
-exact; decision fields (ratings, Investor Type, agent Classification) get formatting and categorical
-drift ('A minus', 'SWF', 'PWM'); afterthought fields (investor names, AUM/NAV/PensionAssets) get
-suffix drops, ' - Tranche A', case flips, M<->B unit mix-ups and range strings like '500M - 2Bn'.
+exact; decision fields (ratings, UBS and agent Classification) get formatting and categorical drift
+('A minus', 'Rated', 'PWM'); LP Size Criteria is a closed vocabulary ("AUM"/"NAV"/"Assets") so its
+only degradation is a blank cell; afterthought fields (investor names, LP
+Size) get suffix drops, ' - Tranche A', case flips, and size strings that argue with the column's
+$Bn unit - ranges ('5 - 8'), thresholds ('>12'), spelled units ('13.5 bn') and figures typed in
+millions.
 The same LP is therefore spelled differently across rows, exercising every parser, normalizer and
 report in lp_db_extract.py. Chaos draws from its own CHAOS_SEED rng, so the underlying clean dataset
 is identical whether CHAOS_ENABLED is True or False, and re-running with the same seed reproduces
@@ -47,7 +55,7 @@ import openpyxl
 SCRIPT_DIR = Path(__file__).resolve().parent          # pe-sub-jobs/scripts/
 DATA_DIR = SCRIPT_DIR.parent / "data"                 # pe-sub-jobs/data/
 FACILITIES_FILE = DATA_DIR / "mock" / "facilities.csv"
-EXPORT_OUT = DATA_DIR / "import" / "LP DB Export 2026.08.17.xlsx"
+EXPORT_OUT = DATA_DIR / "import" / f"LP DB Export {date.today():%Y.%m.%d}.xlsx"
 SHEET_NAME = "BBs"
 
 # ── tunables ────────────────────────────────────────────────────────────────
@@ -61,19 +69,32 @@ ORPHAN_ACCOUNTS = [             # AccountIDs absent from facilities.csv -> exerc
     ("5VZ9002", "TPG AG Asset Based Credit Fund"),
 ]
 
-# Must match lp_db_extract.SRC_COLS exactly — the extract validates the header.
+# The 29 headers of the 2026-08-18 LP DB Export, in order, EXACTLY as the real file spells them —
+# quirks included, because reproducing them is most of the point of this generator: "LP Size" and
+# "($ Bil)" are separated by a CRLF inside the one cell, "Insitutional" is misspelt at source, and
+# "Moody'S" carries a capital S. lp_db_extract matches headers through _norm(), which absorbs all
+# three, so this stays a faithful sample rather than a cleaned-up one.
+SRC_HEADERS = [
+    "AccountID", "FndName", "Investor Name", "Parent", "SPV", "UBS LP Classification",
+    "Insitutional vs HNW", "Investment Grade?", "Agent LP Classification", "S&P", "Moody'S",
+    "Fitch", "LP Size\r\n($ Bil)", "LP Size Criteria", "Capital Commitments", "Uncalled Capital",
+    "UBS Advance Rate", "Agent Concentration Limit", "UBS Concentration Limit",
+    "% of Capital Commitments", "Called Capital", "% of Uncalled Capital", "% of LP Called",
+    "Agent Excess Concentration", "UBS Excess Concentration", "Agent Borrowing Base",
+    "UBS Borrowing Base", "Notes", "BBDate",
+]
+
+# Internal keys for the same 29 columns, in the same order. Mirrors lp_db_extract.SRC_COLS so the
+# chaos monkey can address a column by name and the two scripts stay legible side by side.
 SRC_COLS = [
-    "AccountID", "FndName", "InvestorName", "Parent", "SPV", "InvestorType", "Region", "HQ",
-    "InstitutionalHNW", "InvestmentGrade", "Classification", "Notes", "SP", "Moodys", "Fitch",
-    "AUM", "NAV", "PensionAssets", "FundingRatio", "UBSAR", "AgentAR", "Commitments",
-    "PercentOfCommitments", "Called", "Uncalled", "PercentOfUncalled", "CalledPercent",
-    "AgentCL", "UBSCL", "AgentBB", "UBSBB", "BBDate",
+    "AccountID", "FndName", "InvestorName", "Parent", "SPV", "UbsClassification",
+    "InstitutionalHNW", "InvestmentGrade", "Classification", "SP", "Moodys", "Fitch",
+    "LpSizeBil", "LpSizeCriteria", "Commitments", "Uncalled", "UBSAR", "AgentCL", "UBSCL",
+    "PercentOfCommitments", "Called", "PercentOfUncalled", "CalledPercent",
+    "AgentExcessConc", "UBSExcessConc", "AgentBB", "UBSBB", "Notes", "BBDate",
 ]
 
 # ── reference vocabularies (canonical values, so they map cleanly through the extract) ───────
-REGIONS = ["North America", "Europe", "Asia Pacific", "Latin America", "Middle East",
-           "United Kingdom", "Africa"]
-
 # investor_type -> (name-suffix templates, size measure). Canonical per data/reference/investor_types.csv.
 TYPE_SPECS = {
     "Public Pension":        (["Public Employees Retirement System", "State Teachers Retirement", "State Pension Fund"], "pension_assets"),
@@ -99,12 +120,17 @@ TYPE_WEIGHTS = {  # rough real-world mix
     "Institutional Investor": 3, "Other Institutional": 4,
 }
 
-# Agent LP Category (export "Classification") -> (agent advance rate, weight). Canonical per
-# data/reference/agent_lp_categories.csv, so each value maps to itself.
+# Agent LP Category (export "Agent LP Classification") -> (agent advance rate, weight). Canonical
+# per data/reference/agent_lp_categories.csv, so each value maps to itself.
+#
+# The rates MUST match data/reference/agent_rate_map.csv. The export no longer carries an Agent
+# Advance Rate column, so the extract resolves the rate from the category — and these rates are what
+# the Agent Borrowing Base below is computed with. If the two drift apart, the generated file stops
+# reconciling: its Agent BB would not equal the rate the extract assigns x the eligible uncalled.
 AGENT_CATEGORIES = [
     ("Rated Included",            0.90, 30),
     ("Non-Rated Included",        0.75, 34),
-    ("Designated Institutional",  0.65, 18),
+    ("Designated Institutional",  0.60, 18),
     ("Designated PWM",            0.50, 10),
     ("Ineligible Investor",       0.00,  8),
 ]
@@ -151,40 +177,39 @@ WORD2 = ["", "", "", "Capital", "Global", "Strategic", "Alternative", "Atlantic"
 CHAOS_RATES = {
     "investor_name": 0.25,     # suffix drops / tranche suffixes / case flips
     "ratings": 0.15,           # 'A-' -> 'A minus', case noise, NR variants (all three agencies)
-    "aum_scale": 0.10,         # unit mix-ups / style drift on AUM
-    "pension_scale": 0.10,     # same on PensionAssets (can flip a Corp Pension classification)
-    "nav_text": 0.15,          # NAV -> range/threshold/shorthand strings ('500M - 2Bn', '>5B')
-    "investor_type": 0.15,     # categorical drift ('SWF', 'Corporate Pension', 'FoF')
+    "lp_size": 0.15,           # LP Size -> range/threshold/shorthand strings ('5 - 8', '>10', '2bn')
+    "lp_size_criteria": 0.08,  # size basis left blank (the label itself never drifts)
+    "ubs_classification": 0.12,  # UBS class drift ('Rated', 'Corp Pension >5Bn', 'HNW')
     "agent_category": 0.10,    # agent Classification drift ('Rated', 'PWM', 'Ineligible')
     "ubscl_null": 0.05,        # missing concentration limit
-    "funding_ratio_null": 0.08,  # missing pension funding ratio
 }
 
 # Never degraded: cash/legal LPA figures plus the facility join keys, which analysts keep exact.
 CHAOS_SACRED = ("AccountID", "FndName", "Commitments", "Called", "Uncalled", "BBDate",
-                "UBSAR", "AgentAR", "AgentBB", "UBSBB",
+                "UBSAR", "AgentBB", "UBSBB", "AgentExcessConc", "UBSExcessConc",
                 "PercentOfCommitments", "PercentOfUncalled", "CalledPercent")
 
 _NAME_SUFFIX_RE = re.compile(r",?\s+(LLC|L\.L\.C\.|L\.P\.|LP|Ltd\.?|Inc\.?|Limited)$", re.I)
 
 # Canonical value -> manual-entry variants: a mix of alias-resolvable spellings (exercise the
 # extract's reference lists) and unknown labels (exercise its unmatched reports).
-_ITYPE_DRIFT = {
-    "Sovereign Wealth Fund": ["SWF", "Sovereign Wealth"],
-    "Fund of Funds": ["FoF", "Fund-of-Funds", "FOF & Other Asset Manager"],
-    "Endowment": ["Endowments", "Endowment/Foundation"],
-    "Foundation": ["Foundations"],
-    "Insurance Company": ["Insurance", "Ins. Co."],
-    "Family Office": ["Family Offices", "Single Family Office"],
-    "Other Institutional": ["Other Institutional Investors"],
-    "Public Pension": ["Public Pension Plan", "Pension - Public"],
-    "Pension Fund": ["Corporate Pension", "Pension"],
-    "Hedge Fund": ["Hedge Fund Manager"],
-    "Corporate": ["Corporate Investor"],
-    "Healthcare": ["Healthcare System"],
-    "Institutional Investor": ["Institutional"],
-    "Investment Consultant": ["Consultant"],
+# UBS LP Classification drift. The export now states this field outright, so it is a decision field
+# an analyst types — and therefore drifts. Some variants resolve through ubs_lp_categories.csv,
+# others are unknown labels that exercise the extract's unmatched report.
+_UBS_CLS_DRIFT = {
+    "Rated Investor": ["Rated", "Rated Included", "RATED INVESTOR"],
+    "Corp Pension > $5Bn Assets": ["Corp Pension >5Bn", "Corporate Pension > $5Bn Assets",
+                                   "Corp Pension 5Bn+"],
+    "Corp Pension > $1Bn Assets": ["Corp Pension >1Bn", "Corporate Pension > $1Bn Assets",
+                                   "Corp Pension 1Bn+"],
+    "Unrated NAV > $1Bn": ["Unrated NAV", "Unrated NAV >1Bn", "NAV > 1Bn"],
+    "FoF & Other > $10Bn AUM": ["FoF & Other", "FoF and Other > $10Bn AUM", "FOF >10Bn"],
+    "Other Institutional": ["Other Inst", "Other Institutional Investor", "Other"],
+    "HNW Feeder (acceptable)": ["HNW Feeder", "HNW Feeder Acceptable"],
+    "HNW (acceptable)": ["HNW", "HNW Acceptable"],
+    "Excluded": ["Ineligible", "Excluded Investor", "Not Eligible"],
 }
+
 _AGENT_DRIFT = {
     "Rated Included": ["Rated", "Rated Included Investors", "rated included"],
     "Non-Rated Included": ["Non Rated Included Investors", "Included Investors", "Non-Rated"],
@@ -193,8 +218,6 @@ _AGENT_DRIFT = {
     "Designated PWM": ["PWM", "Designated - PWM"],
     "Ineligible Investor": ["Ineligible", "Ineligible Investors", "Excluded Investor"],
 }
-_MONEY_STR_RE = re.compile(r"^\$?(\d+(?:\.\d+)?)\s*([KMBT])$", re.I)
-_UNIT_MULT = {"K": 1e3, "M": 1e6, "B": 1e9, "T": 1e12}
 
 
 def _blank(v) -> bool:
@@ -227,50 +250,29 @@ def _chaos_rating(val: str, rng: random.Random) -> tuple[str, str | None]:
     return "case_noise", s.lower()
 
 
-def _chaos_scale(val: str, rng: random.Random) -> tuple[str, str] | None:
-    """Scale drift on '$124.9B'-style strings: M<->B unit swap, style drift ('124.9 bn',
-    '$124.9B+'), or raw absolute dollars."""
-    m = _MONEY_STR_RE.match(str(val).strip())
-    if not m:
+def _chaos_lp_size(val, rng: random.Random) -> tuple[str, str] | None:
+    """LP Size manual-entry patterns. The column's unit is $Bn and its clean value is a bare number
+    (13.5), so the realistic corruptions are the ones that argue with that convention: a range, a
+    qualitative threshold, a spelled-out unit, or - the costly one - a figure typed in MILLIONS into
+    a billions column. Derived from the clean value so the result stays plausible."""
+    try:
+        bil = float(val)
+    except (TypeError, ValueError):
         return None
-    num, unit = m.group(1), m.group(2).upper()
-    options = [("style_naked", f"{num} {unit.lower()}n" if unit in ("B", "T") else f"{num} {unit.lower()}"),
-               ("style_plus", f"${num}{unit}+")]
-    if unit == "B":
-        options.append(("unit_swap", f"${num}M"))
-        options.append(("absolute", str(int(float(num) * 1e9))))
-    elif unit == "M":
-        options.append(("unit_swap", f"${num}B"))
-    return rng.choice(options)
-
-
-def _chaos_nav(val, rng: random.Random) -> tuple[str, str] | None:
-    """NAV manual-entry patterns: ranges with shared or mixed units, symbol shorthand, qualitative
-    thresholds — derived from the clean value so the result stays plausible."""
-    m = _MONEY_STR_RE.match(str(val).strip())
-    if not m:
+    if bil <= 0:
         return None
-    dollars = float(m.group(1)) * _UNIT_MULT[m.group(2).upper()]
-    if dollars <= 0:
-        return None
-    mn = dollars / 1e6
-    pattern = rng.choice(["range_same_unit", "range_mixed_unit", "symbol_shorthand", "threshold"])
-    if pattern == "range_same_unit":
-        low, high = round(mn * 0.7), round(mn * 1.3)
-        if high >= 1000:
-            return pattern, f"{round(low / 1000, 1)}-{round(high / 1000, 1)}B"
-        return pattern, f"{low}-{high}M"
-    if pattern == "range_mixed_unit":
-        if mn > 1000:
-            return pattern, f"{round(mn * 0.5)}M - {round(mn * 1.5 / 1000, 1)}Bn"
-        return pattern, f"{round(mn)}M"
-    if pattern == "symbol_shorthand":
-        if mn > 1000:
-            return pattern, f"${round(mn * 0.8 / 1000)}-{round(mn * 1.2 / 1000)}Bn"
-        return pattern, f"${round(mn)}m"
-    unit = "M" if mn < 1000 else "B"
-    display = round(mn) if unit == "M" else round(mn / 1000)
-    return pattern, f"{rng.choice('><')}{display}{unit}"
+    pattern = rng.choice(["range", "threshold", "unit_spelled", "unit_swap_millions",
+                          "absolute_dollars"])
+    if pattern == "range":
+        low, high = round(bil * 0.7, 1), round(bil * 1.3, 1)
+        return pattern, f"{low} - {high}"
+    if pattern == "threshold":
+        return pattern, f"{rng.choice('><')}{round(bil)}"
+    if pattern == "unit_spelled":
+        return pattern, rng.choice([f"${bil}B", f"{bil} bn", f"${bil}Bn"])
+    if pattern == "unit_swap_millions":
+        return pattern, str(round(bil * 1000, 1))       # $Bn figure typed as $mm
+    return pattern, str(int(bil * 1e9))                  # absolute dollars in a $Bn column
 
 
 def apply_chaos(export_rows: list[dict], rng: random.Random) -> list[tuple]:
@@ -294,24 +296,22 @@ def apply_chaos(export_rows: list[dict], rng: random.Random) -> list[tuple]:
             for col in ("SP", "Moodys", "Fitch"):
                 if not _blank(row[col]):
                     mutate(row_no, row, col, _chaos_rating(row[col], rng))
-        if not _blank(row["AUM"]) and rng.random() < CHAOS_RATES["aum_scale"]:
-            mutate(row_no, row, "AUM", _chaos_scale(row["AUM"], rng))
-        if not _blank(row["PensionAssets"]) and rng.random() < CHAOS_RATES["pension_scale"]:
-            mutate(row_no, row, "PensionAssets", _chaos_scale(row["PensionAssets"], rng))
-        if not _blank(row["NAV"]) and rng.random() < CHAOS_RATES["nav_text"]:
-            mutate(row_no, row, "NAV", _chaos_nav(row["NAV"], rng))
-        if rng.random() < CHAOS_RATES["investor_type"]:
-            variants = _ITYPE_DRIFT.get(_as_str(row["InvestorType"]))
+        if not _blank(row["LpSizeBil"]) and rng.random() < CHAOS_RATES["lp_size"]:
+            mutate(row_no, row, "LpSizeBil", _chaos_lp_size(row["LpSizeBil"], rng))
+        if (not _blank(row["LpSizeCriteria"])
+                and rng.random() < CHAOS_RATES["lp_size_criteria"]):
+            mutate(row_no, row, "LpSizeCriteria", ("nulled", None))
+        if rng.random() < CHAOS_RATES["ubs_classification"]:
+            variants = _UBS_CLS_DRIFT.get(_as_str(row["UbsClassification"]))
             if variants:
-                mutate(row_no, row, "InvestorType", ("categorical_drift", rng.choice(variants)))
+                mutate(row_no, row, "UbsClassification",
+                       ("categorical_drift", rng.choice(variants)))
         if rng.random() < CHAOS_RATES["agent_category"]:
             variants = _AGENT_DRIFT.get(_as_str(row["Classification"]))
             if variants:
                 mutate(row_no, row, "Classification", ("categorical_drift", rng.choice(variants)))
         if not _blank(row["UBSCL"]) and rng.random() < CHAOS_RATES["ubscl_null"]:
             mutate(row_no, row, "UBSCL", ("nulled", None))
-        if not _blank(row["FundingRatio"]) and rng.random() < CHAOS_RATES["funding_ratio_null"]:
-            mutate(row_no, row, "FundingRatio", ("nulled", None))
     return muts
 
 
@@ -335,17 +335,59 @@ def money(lo: int, hi: int, step: int = 100_000) -> int:
     return random.randrange(lo, hi, step)
 
 
-def size_label(measure: str) -> str:
-    # Log-uniform: fund sizes are log-distributed, and it puts mass on both sides of the matrix
-    # boundaries (Corp Pension $1Bn/$5Bn, Unrated NAV $1Bn, FoF & Other $10Bn AUM) so every
-    # classify_ubs branch sees traffic.
+def size_bil(measure: str) -> float:
+    """One LP-size figure in BILLIONS of dollars — the unit the export's "LP Size ($ Bil)" column
+    carries, so no conversion happens on the way out.
+
+    Log-uniform: fund sizes are log-distributed, and it puts mass on both sides of the classification
+    boundaries (Corp Pension $1Bn/$5Bn, Unrated NAV $1Bn, FoF & Other $10Bn AUM) so every branch of
+    classify_ubs below sees traffic."""
     def log_uniform(lo: float, hi: float) -> float:
         return 10 ** random.uniform(math.log10(lo), math.log10(hi))
     if measure == "pension_assets":
-        return f"${log_uniform(0.8, 120):.1f}B"
+        return round(log_uniform(0.8, 120), 1)
     if measure == "nav":
-        return f"${log_uniform(0.2, 8):.1f}B"
-    return f"${log_uniform(0.3, 60):.1f}B"           # aum
+        return round(log_uniform(0.2, 8), 1)
+    return round(log_uniform(0.3, 60), 1)            # aum
+
+
+# Which LP Size Criteria label goes with each internal size measure. Matches the platform's
+# LP_SIZE_CRITERIA_OPTS ("AUM", "NAV", "Assets") so the extract routes the figure straight back into
+# the right column.
+SIZE_CRITERIA = {"aum": "AUM", "nav": "NAV", "pension_assets": "Assets"}
+
+
+def classify_ubs(*, agent_cat: str, rated: bool, hnw: bool, spv: bool, itype: str,
+                 aum_bil: float | None, nav_bil: float | None,
+                 pension_bil: float | None) -> str:
+    """The UBS LP Classification for a generated LP.
+
+    The export now STATES this field, so the extract no longer derives it — but the value written has
+    to be consistent with the row's other attributes or the sample would be incoherent. This is the
+    waterfall lp_db_extract used to run, applied here to the clean values before chaos, which is the
+    correct place for it: the generator knows the LP's truth, the reader only knows what it is told.
+      1. agent 'Ineligible Investor' -> Excluded;
+      2. any usable agency rating -> Rated Investor;
+      3. HNW (flag, or agent 'Designated PWM') -> HNW Feeder when the vehicle is an SPV, else HNW;
+      4. pension assets > $5Bn / > $1Bn -> the two Corp Pension classes;
+      5. NAV > $1Bn -> Unrated NAV > $1Bn;
+      6. FoF/hedge fund with AUM > $10Bn -> FoF & Other > $10Bn AUM;
+      7. catch-all -> Other Institutional."""
+    if agent_cat == "Ineligible Investor":
+        return "Excluded"
+    if rated:
+        return "Rated Investor"
+    if hnw or agent_cat == "Designated PWM":
+        return "HNW Feeder (acceptable)" if spv else "HNW (acceptable)"
+    if pension_bil is not None and pension_bil > 5:
+        return "Corp Pension > $5Bn Assets"
+    if pension_bil is not None and pension_bil > 1:
+        return "Corp Pension > $1Bn Assets"
+    if nav_bil is not None and nav_bil > 1:
+        return "Unrated NAV > $1Bn"
+    if itype in ("Fund of Funds", "Hedge Fund") and aum_bil is not None and aum_bil > 10:
+        return "FoF & Other > $10Bn AUM"
+    return "Other Institutional"
 
 
 def rating_triplet(ig: bool) -> tuple[str, str, str]:
@@ -381,24 +423,31 @@ def build_investor(idx: int, used_names: set) -> dict:
     lo, hi, _ = pick_weighted(UBS_BANDS, [w for *_, w in UBS_BANDS])
     ubsar = round(random.uniform(lo, hi), 2)
     is_pension = measure == "pension_assets"
+    spv = random.random() < 0.12
+    hnw = itype == "Family Office" and random.random() < 0.5
+
+    # nav-measure LPs (FoF / Hedge Fund) carry manager-level AUM alongside fund NAV, which the
+    # "FoF & Other > $10Bn AUM" branch needs. Only the LP's OWN measure reaches the export, as the
+    # single LP Size figure — the others exist here purely to classify it.
+    aum_bil = size_bil("aum") if measure in ("aum", "nav") else None
+    nav_bil = size_bil("nav") if measure == "nav" else None
+    pension_bil = size_bil("pension_assets") if is_pension else None
+    lp_size_bil = {"aum": aum_bil, "nav": nav_bil, "pension_assets": pension_bil}[measure]
+
     return {
         "name": name,
         "parent": name,
-        "spv": "Y" if random.random() < 0.12 else "N",
+        "spv": "Y" if spv else "N",
         "itype": itype,
-        "region": random.choice(REGIONS),
-        "hq": "Yes" if random.random() < 0.8 else "No",
-        "inst": "HNW" if itype == "Family Office" and random.random() < 0.5 else "Institutional",
+        "inst": "HNW" if hnw else "Institutional",
         "ig": "Yes" if ig else "No",
         "cls": agent_cat,
         "agent_ar": agent_ar,
         "sp_rating": sp, "moodys_rating": mdy, "fitch_rating": fitch,
-        # nav-measure LPs (FoF / Hedge Fund) report manager-level AUM alongside fund NAV; the
-        # "FoF & Other > $10Bn AUM" branch of classify_ubs needs it.
-        "aum": size_label("aum") if measure in ("aum", "nav") else None,
-        "nav": size_label("nav") if measure == "nav" else None,
-        "pension_assets": size_label("pension_assets") if is_pension else None,
-        "funding": round(random.uniform(0.72, 1.08), 2) if is_pension else None,
+        "lp_size_bil": lp_size_bil,
+        "lp_size_criteria": SIZE_CRITERIA[measure],
+        "ubs_cls": classify_ubs(agent_cat=agent_cat, rated=rated, hnw=hnw, spv=spv, itype=itype,
+                                aum_bil=aum_bil, nav_bil=nav_bil, pension_bil=pension_bil),
         "ubsar": ubsar,
         "agent_cl": round(random.uniform(0.05, 0.15), 2),
         "ubs_cl": round(random.uniform(0.05, 0.15), 2),
@@ -444,33 +493,45 @@ def main() -> int:
             uncalled = round(commit * random.uniform(0.15, 0.85) / 100_000) * 100_000
             uncalled = min(max(uncalled, 100_000), commit - 100_000)
             called = commit - uncalled
-            agent_bb = round(inv["agent_ar"] * uncalled)
-            ubs_bb = round(inv["ubsar"] * uncalled)
             row = {
                 **inv,
                 "acct": acct, "fund": fund_by_acct[acct], "bbdate": fac_bbdate[acct],
                 "commit": commit, "called": called, "uncalled_capital": uncalled,
                 "called_pct": round(called / commit, 2),
-                "agent_borrowing_base": agent_bb, "ubs_borrowing_base": ubs_bb,
             }
             positions.append(row)
             per_fac[acct].append(row)
 
-    # Second pass: per-facility share percentages.
+    # Second pass: everything that needs the facility's totals — share percentages, then the two
+    # excess-concentration figures and the borrowing bases computed net of them.
+    #
+    # A concentration limit is a fraction of the facility's TOTAL uncalled capital, so an LP's cap is
+    # limit x total and its excess is whatever its own uncalled exceeds that cap by. The borrowing
+    # base then advances against the uncalled that remains WITHIN the cap — which is why these three
+    # columns have to be produced together and after the totals are known. The agent and UBS sides
+    # carry their own limits, so they cut at different points and disagree on the same LP.
     for acct, rows in per_fac.items():
         tot_c = sum(r["commit"] for r in rows) or 1
         tot_u = sum(r["uncalled_capital"] for r in rows) or 1
         for r in rows:
             r["pct_commit"] = round(r["commit"] / tot_c, 4)
             r["pct_of_fund_uncalled"] = round(r["uncalled_capital"] / tot_u, 4)
+            uncalled = r["uncalled_capital"]
+            agent_excess = max(0, round(uncalled - r["agent_cl"] * tot_u))
+            ubs_excess = max(0, round(uncalled - r["ubs_cl"] * tot_u))
+            r["agent_excess_conc"] = agent_excess
+            r["ubs_excess_conc"] = ubs_excess
+            r["agent_borrowing_base"] = round(r["agent_ar"] * (uncalled - agent_excess))
+            r["ubs_borrowing_base"] = round(r["ubsar"] * (uncalled - ubs_excess))
 
     # Export rows in SRC_COLS order, as dicts so the chaos monkey can address columns by name.
     export_rows = [dict(zip(SRC_COLS, [
-        r["acct"], r["fund"], r["name"], r["parent"], r["spv"], r["itype"], r["region"], r["hq"],
-        r["inst"], r["ig"], r["cls"], "", r["sp_rating"], r["moodys_rating"], r["fitch_rating"],
-        r["aum"], r["nav"], r["pension_assets"], r["funding"], r["ubsar"], r["agent_ar"], r["commit"],
-        r["pct_commit"], r["called"], r["uncalled_capital"], r["pct_of_fund_uncalled"], r["called_pct"],
-        r["agent_cl"], r["ubs_cl"], r["agent_borrowing_base"], r["ubs_borrowing_base"], r["bbdate"],
+        r["acct"], r["fund"], r["name"], r["parent"], r["spv"], r["ubs_cls"],
+        r["inst"], r["ig"], r["cls"], r["sp_rating"], r["moodys_rating"], r["fitch_rating"],
+        r["lp_size_bil"], r["lp_size_criteria"], r["commit"], r["uncalled_capital"], r["ubsar"],
+        r["agent_cl"], r["ubs_cl"], r["pct_commit"], r["called"], r["pct_of_fund_uncalled"],
+        r["called_pct"], r["agent_excess_conc"], r["ubs_excess_conc"],
+        r["agent_borrowing_base"], r["ubs_borrowing_base"], "", r["bbdate"],
     ])) for r in positions]
 
     # Degrade what gets written, so the XLSX carries realistic manual-entry quality. Separate rng:
@@ -483,7 +544,7 @@ def main() -> int:
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = SHEET_NAME
-    ws.append(SRC_COLS)
+    ws.append(SRC_HEADERS)          # the real file's header spellings, not the internal keys
     for row in export_rows:
         ws.append([row[c] for c in SRC_COLS])
     EXPORT_OUT.parent.mkdir(parents=True, exist_ok=True)

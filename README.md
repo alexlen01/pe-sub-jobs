@@ -30,17 +30,24 @@ agent_bank, name, account_number, loan_amount, maturity_date, bank_status, bank_
 Posts LP Master rows to `POST /api/lp-master/ingest`. The API upserts on investor name.
 
 ```
-investor_name, parent, spv, high_qty, investor_type, inst_vs_hnw, region_location,
-investment_grade, sp, mdy, fitch, aum, nav, pension, pension_funded,
-ubs_classification, ubs_default_adv_rate, ubs_default_conc_limit, notes
+investor_name, parent, spv, investor_type, institutional_or_hnw, region_location,
+investment_grade, sp_rating, moodys_rating, fitch_rating, aum, nav, pension_assets,
+funding_ratio, ubs_lp_category, ubs_default_advance_rate, ubs_default_concentration_limit, notes
 ```
 
-- `spv`, `high_qty`, `investment_grade` — `true` / `false`
-- `sp`, `mdy`, `fitch` — rating strings; blank is stored as `""`
+- `spv`, `investment_grade` — `true` / `false`
+- `sp_rating`, `moodys_rating`, `fitch_rating` — rating strings; blank is stored as `""`
+- `high_quality` is **not** a column. The LP DB Export dropped it in the 2026-08-18 format and
+  nothing else supplies it, so pe-sub-api keeps its own column on the schema default (`TRUE`)
+  rather than being fed a fabricated value.
+- `investor_type`, `region_location` and `funding_ratio` are written **blank** for the same reason.
+  The API reads blank as "not resubmitted" and leaves any value already on the record intact.
+- `aum` / `nav` / `pension_assets` — exactly one is populated per row, chosen by the export's
+  `LP Size Criteria` (`AUM` → `aum`, `NAV` → `nav`, `Assets` → `pension_assets`).
 
 ### `lp-records-seed`
 
-Posts LP-to-facility rows to `POST /api/lpRecords/seed`, creating `lp_records` the same way the ingestion wizard does. Each row carries the full 31-column per-LP set from the LP DB Export; a legacy 7-column file still parses, since the reader pads blanks.
+Posts LP-to-facility rows to `POST /api/lpRecords/seed`, creating `lp_records` the same way the ingestion wizard does. Each row carries the full 32-column per-LP set from the LP DB Export; a legacy 7-column file still parses, since the reader pads blanks.
 
 Row values win on the server; the matching LP Master record only fills blanks. The API inserts only when that (facility, investor) pair has no row yet, so re-running never overwrites anything committed through the Shadow BB flow.
 
@@ -68,7 +75,7 @@ Set `INGEST_RUN_ON_STARTUP=false` to skip the startup feeds — useful when `pe-
 
 Concentration limits and UBS advance rates in the fixtures come from `bb_criteria_matrix`, the team's authoritative source. The `agent_*` columns hold the agent bank's own diverging figures — that gap is what the platform measures.
 
-`data/reference/` holds the editable lists the extract normalizes against: the BB criteria matrix, the rate floor map, investor types and their aliases, and agent LP categories.
+`data/reference/` holds the editable lists the extract normalizes against: the BB criteria matrix, the rate floor map, agent LP categories, UBS LP classifications (`ubs_lp_categories.csv`), and the agent advance rate per category (`agent_rate_map.csv`). The last two arrived with the 2026-08-18 export format — the export now states the UBS classification outright instead of it being derived, and it no longer carries an agent advance rate at all, so that rate is resolved from the row's agent category. `investor_types.csv` / `investor_type_aliases.csv` are no longer read by the extract (the Investor Type column is gone from the feed); they stay because they mirror `classification_config.INVESTOR_TYPE_OPTS` for the platform.
 
 ## Scripts
 

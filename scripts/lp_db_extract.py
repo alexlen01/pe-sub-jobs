@@ -17,20 +17,21 @@ Writes exactly three CSVs into pe-sub-jobs/data/out/, the directory pe-sub-jobs 
                            "Unknown"-bank Inactive placeholder for every export account the report
                            does not list
 
-Source format: the 29-column LP DB Export of 2026-08-18. Columns are located by HEADER, not by
+Source format: the 30-column LP DB Export of 2026-08-18. Columns are located by HEADER, not by
 position, so a reshuffle costs nothing here (see SRC_HEADERS). Against the previous 32-column
 format that revision:
   * states the UBS LP Classification outright, where it used to be derived from the LP's attributes
   * replaces AUM / NAV / Pension Assets with one "LP Size ($ Bil)" figure plus a "LP Size Criteria"
     label naming which measure it is
   * adds Agent / UBS Excess Concentration
-  * drops High Quality, Investor Type, Region, Funded Ratio and Agent Advance Rate
+  * drops High Quality, Investor Type, Region and Funded Ratio
 
 Normalization against the editable lists in pe-sub-jobs/data/reference/:
   * Agent LP Category (agent_lp_categories.csv) and UBS LP Classification (ubs_lp_categories.csv)
     map to canonical values; unmatched values pass through unchanged and are counted in the report
-  * the agent advance rate is resolved from the row's Agent LP Category (agent_rate_map.csv),
-    because the export no longer carries the rate itself, and is used as written
+  * the agent advance rate is read from the export's Agent Advance Rate column and used as
+    written; only when that cell is blank - or the column is absent, the one column whose absence is
+    not fatal - is it resolved from the row's Agent LP Category (agent_rate_map.csv)
   * the fed UBSAR is slotted into a discrete rate group via rate_floor_map.csv (>=90 -> 90,
     75-89.9 -> 75, 65-74.9 -> 65, 50-64.9 -> 50, <50 -> 0)
   * LP Size is routed back into the aum / nav / pension_assets column its criteria names, keeping
@@ -73,23 +74,30 @@ DATA_DIR = JOBS_ROOT / "data"
 # ============================================================================================
 #  EDIT THIS for each run — the LP DB Export to process. Absolute, or relative to pe-sub-jobs/.
 # ============================================================================================
-EXPORT_FILE = DATA_DIR / "import" / "LP DB Export 2026.08.18.xlsx"
+EXPORT_FILE = DATA_DIR / "import" / "LP DB Export 2026.08.19.xlsx"
 
 AGENT_BANK_SUMMARY_FILE = DATA_DIR / "import" / "AgentBankSummaryRpt.xlsx"
 OUT_DIR = DATA_DIR / "out"              # all outputs land here
 REFERENCE_DIR = DATA_DIR / "reference"  # normalization lists
 
 # --- source columns -------------------------------------------------------------------------
-# Internal names for the export's 29 columns, in the order the 2026-08-18 format lists them.
+# Internal names for the export's 30 columns, in the order the 2026-08-18 format lists them.
 # Columns are located BY HEADER, not by position (see SRC_HEADERS / read_export), so a further
 # reshuffle needs no code change - only a new spelling needs one.
 SRC_COLS = [
     "AccountID", "FndName", "InvestorName", "Parent", "SPV", "UbsClassification",
     "InstitutionalHNW", "InvestmentGrade", "Classification", "SP", "Moodys", "Fitch",
-    "LpSizeBil", "LpSizeCriteria", "Commitments", "Uncalled", "UBSAR", "AgentCL", "UBSCL",
+    "LpSizeBil", "LpSizeCriteria", "Commitments", "Uncalled", "UBSAR", "AgentAR",
+    "AgentCL", "UBSCL",
     "PercentOfCommitments", "Called", "PercentOfUncalled", "CalledPercent",
     "AgentExcessConc", "UBSExcessConc", "AgentBB", "UBSBB", "Notes", "BBDate",
 ]
+
+# Agent Advance Rate is the one column allowed to be ABSENT rather than fatal: workbooks written
+# while it was thought to have been dropped do not carry it, and the row is not lost by its absence -
+# agent_rate_map.csv resolves the rate from the row's Agent LP Category instead. Every other column
+# missing still aborts the run.
+OPTIONAL_COLS = {"AgentAR"}
 
 # Accepted header spellings per column. Matching runs through _norm(), which lowercases and
 # collapses every run of non-alphanumerics to one space - so it absorbs the format's own quirks
@@ -122,6 +130,7 @@ SRC_HEADERS = {
     "Commitments":          ["Capital Commitments", "Commitments"],
     "Uncalled":             ["Uncalled Capital", "Uncalled"],
     "UBSAR":                ["UBS Advance Rate", "UBSAR", "UBS Advance Rate (%)"],
+    "AgentAR":              ["Agent Advance Rate", "AgentAR", "Agent Advance Rate (%)"],
     "AgentCL":              ["Agent Concentration Limit", "AgentCL"],
     "UBSCL":                ["UBS Concentration Limit", "UBSCL"],
     "PercentOfCommitments": ["% of Capital Commitments", "% of Commitments", "PercentOfCommitments"],
@@ -142,11 +151,10 @@ SRC_HEADERS = {
 #                                 region stay in the schema but are governed outside this feed.
 #   AUM / NAV / PensionAssets   - superseded by LP Size ($ Bil) + LP Size Criteria.
 #   FundingRatio                - no longer sourced.
-#   AgentAR                     - resolved from the Agent LP Classification (agent_rate_map.csv).
 RETIRED_HEADERS = {
     "InvestorType": "Investor Type", "Region": "Region / Location", "HQ": "High Quality",
     "AUM": "AUM", "NAV": "NAV", "PensionAssets": "Pension Assets",
-    "FundingRatio": "Funded Ratio (%)", "AgentAR": "Agent Advance Rate (%)",
+    "FundingRatio": "Funded Ratio (%)",
 }
 
 # --- numeric normalization ------------------------------------------------------------------
@@ -160,7 +168,8 @@ RETIRED_HEADERS = {
 # The shape of the VALUE decides instead, which is unambiguous and idempotent: a share or rate is a
 # fraction by definition, so anything carrying a '%' or exceeding 1 is a percent and is scaled down,
 # while 0.154 is already correct and left alone.
-PERCENT_COLS = {"UBSAR", "PercentOfCommitments", "PercentOfUncalled", "CalledPercent"}
+PERCENT_COLS = {"UBSAR", "AgentAR", "PercentOfCommitments", "PercentOfUncalled",
+                "CalledPercent"}
 MONEY_COLS = {"Commitments", "Called", "Uncalled", "AgentBB", "UBSBB",
               "AgentExcessConc", "UBSExcessConc"}
 # A concentration limit is either a percent of uncalled ("7.5%") or an absolute cap ("$25,000,000")
@@ -356,8 +365,8 @@ def load_references(ref_dir: Path) -> Reference:
     ubs_rows = _read_reference_rows(ref_dir / "ubs_lp_categories.csv")[1:]
     ubs_lookup = {_norm(r[0]): r[1] for r in ubs_rows if len(r) >= 2 and r[1]}
 
-    # Agent advance rate by Agent LP Category: the export stopped carrying an Agent Advance Rate
-    # column, so the rate is resolved from the row's category instead of read from the feed.
+    # Agent advance rate by Agent LP Category: the fallback for rows whose Agent Advance Rate
+    # cell is blank, so a rate-less row still gets the rate its category implies.
     agent_rates: dict[str, float] = {}
     for row in _read_reference_rows(ref_dir / "agent_rate_map.csv")[1:]:
         if len(row) < 2:
@@ -475,10 +484,17 @@ def size_columns(row: dict) -> dict[str, str]:
 
 
 # --- agent advance rate ----------------------------------------------------------------------
-def agent_rate_frac(raw_category, ref: Reference) -> float | None:
-    """The agent advance rate for a row, as a fraction. The export no longer carries the rate, so it
-    is resolved from the row's canonical Agent LP Category via agent_rate_map.csv. None when the
-    category is blank or unrecognised - a made-up rate would be indistinguishable from a fed one."""
+def agent_rate_frac(raw_rate, raw_category, ref: Reference) -> float | None:
+    """The agent advance rate for a row, as a fraction. Read from the export's Agent Advance Rate
+    column, which normalize_numeric has already brought to a fraction; the fed value wins outright,
+    dirty or not, because the export is the system of record for it. Only a blank or unparseable
+    cell falls back to the rate the row's canonical Agent LP Category implies (agent_rate_map.csv).
+    None when neither has anything - a made-up rate would be indistinguishable from a fed one."""
+    if not blank(raw_rate):
+        try:
+            return float(raw_rate)
+        except (TypeError, ValueError):
+            pass                                   # unparseable: fall back to the category
     canon, matched = map_agent_cls(raw_category, ref)
     if not matched or not canon:
         return None
@@ -544,7 +560,7 @@ def read_export(path: Path, sheet: str | None = None) -> list[dict]:
         col = header_to_col.get(_norm(name))
         if col is not None:
             column_at.setdefault(col, i)
-    missing = [c for c in SRC_COLS if c not in column_at]
+    missing = [c for c in SRC_COLS if c not in column_at and c not in OPTIONAL_COLS]
     if missing:
         # A stale pre-2026-08-18 workbook fails on exactly the five added columns, so name them and
         # say which retired ones are present - far more useful than a bare missing-column list.
@@ -562,7 +578,8 @@ def read_export(path: Path, sheet: str | None = None) -> list[dict]:
         )
     rows = []
     for r in rows_iter:
-        row = {c: (r[column_at[c]] if column_at[c] < len(r) else None) for c in SRC_COLS}
+        row = {c: (r[column_at[c]] if c in column_at and column_at[c] < len(r) else None)
+               for c in SRC_COLS}
         # Rates/shares arrive as fractions from the LP DB Export and as percents from the platform's
         # own export under several identical headers; normalize_numeric decides on the value, not
         # the header, and is idempotent for values already in the feed's shape.
@@ -794,7 +811,7 @@ def build_seed(export: list[dict], name_by_acct: dict[str, str], ref: Reference)
         if not as_is(row["UbsClassification"]):
             counts["blank_ubs_classification"] += 1
         size = size_columns(row)
-        agent_rate = agent_rate_frac(row["Classification"], ref)
+        agent_rate = agent_rate_frac(row["AgentAR"], row["Classification"], ref)
         if agent_rate is None:
             counts["unresolved_agent_rate"] += 1
 
@@ -804,11 +821,10 @@ def build_seed(export: list[dict], name_by_acct: dict[str, str], ref: Reference)
             "capital_commitment": money_short(row["Commitments"]),
             "uncalled_capital": money_short(row["Uncalled"]),
             "agent_lp_category": agent_cls,
-            # Resolved from the Agent LP Category, NOT floor-mapped. The floor map exists to tame a
-            # dirty fed rate (0.93 -> the 90 group); this value comes from agent_rate_map.csv, which
-            # mirrors config, so it is already canonical. Flooring it would silently turn Designated
-            # Institutional's configured 60% into 50%, since 60 is not one of the 90/75/65/50/0
-            # groups the UBS side uses.
+            # Fed by the export (or, for a blank cell, resolved from the Agent LP Category) and
+            # NOT floor-mapped. The floor map exists to slot a UBS rate into the bank's own
+            # 90/75/65/50/0 groups; the agent's schedule is not those groups, so flooring this
+            # would silently turn Designated Institutional's 60% into 50%.
             "agent_advance_rate": pct(agent_rate),
             "agent_concentration_limit": pct(row["AgentCL"]),
             "parent": as_is(row["Parent"]),
@@ -974,7 +990,7 @@ def main() -> int:
         ("blank UBS classification", sr.counts["blank_ubs_classification"],
          "fed empty by the export"),
         ("unresolved agent advance rate", sr.counts["unresolved_agent_rate"],
-         "agent_rate_map.csv"),
+         "blank in the export and category unmapped: agent_rate_map.csv"),
     ]
     if any(n for _, n, _ in norm_counts):
         print()

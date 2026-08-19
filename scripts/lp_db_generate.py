@@ -19,7 +19,7 @@ Shape of the generated data:
     usable rating to "Rated Investor", so tying presence to the agent bucket keeps the UBS mix near
     the real book's ~40% Rated and leaves unrated LPs to exercise the Corp Pension / Unrated NAV /
     FoF / HNW / Other branches.
-  * Emits the 2026-08-18 29-column format: the UBS LP Classification is written out as its own
+  * Emits the 2026-08-18 30-column format: the UBS LP Classification is written out as its own
     column (classify_ubs runs HERE now, on the clean values, rather than in the extract), the old
     AUM / NAV / Pension Assets trio is replaced by one "LP Size ($ Bil)" figure plus its criteria
     label, and Agent / UBS Excess Concentration are computed against the facility's total uncalled
@@ -69,7 +69,7 @@ ORPHAN_ACCOUNTS = [             # AccountIDs absent from facilities.csv -> exerc
     ("5VZ9002", "TPG AG Asset Based Credit Fund"),
 ]
 
-# The 29 headers of the 2026-08-18 LP DB Export, in order, EXACTLY as the real file spells them —
+# The 30 headers of the 2026-08-18 LP DB Export, in order, EXACTLY as the real file spells them —
 # quirks included, because reproducing them is most of the point of this generator: "LP Size" and
 # "($ Bil)" are separated by a CRLF inside the one cell, "Insitutional" is misspelt at source, and
 # "Moody'S" carries a capital S. lp_db_extract matches headers through _norm(), which absorbs all
@@ -78,18 +78,20 @@ SRC_HEADERS = [
     "AccountID", "FndName", "Investor Name", "Parent", "SPV", "UBS LP Classification",
     "Insitutional vs HNW", "Investment Grade?", "Agent LP Classification", "S&P", "Moody'S",
     "Fitch", "LP Size\r\n($ Bil)", "LP Size Criteria", "Capital Commitments", "Uncalled Capital",
-    "UBS Advance Rate", "Agent Concentration Limit", "UBS Concentration Limit",
+    "UBS Advance Rate", "Agent Advance Rate", "Agent Concentration Limit",
+    "UBS Concentration Limit",
     "% of Capital Commitments", "Called Capital", "% of Uncalled Capital", "% of LP Called",
     "Agent Excess Concentration", "UBS Excess Concentration", "Agent Borrowing Base",
     "UBS Borrowing Base", "Notes", "BBDate",
 ]
 
-# Internal keys for the same 29 columns, in the same order. Mirrors lp_db_extract.SRC_COLS so the
+# Internal keys for the same 30 columns, in the same order. Mirrors lp_db_extract.SRC_COLS so the
 # chaos monkey can address a column by name and the two scripts stay legible side by side.
 SRC_COLS = [
     "AccountID", "FndName", "InvestorName", "Parent", "SPV", "UbsClassification",
     "InstitutionalHNW", "InvestmentGrade", "Classification", "SP", "Moodys", "Fitch",
-    "LpSizeBil", "LpSizeCriteria", "Commitments", "Uncalled", "UBSAR", "AgentCL", "UBSCL",
+    "LpSizeBil", "LpSizeCriteria", "Commitments", "Uncalled", "UBSAR", "AgentAR",
+    "AgentCL", "UBSCL",
     "PercentOfCommitments", "Called", "PercentOfUncalled", "CalledPercent",
     "AgentExcessConc", "UBSExcessConc", "AgentBB", "UBSBB", "Notes", "BBDate",
 ]
@@ -123,10 +125,10 @@ TYPE_WEIGHTS = {  # rough real-world mix
 # Agent LP Category (export "Agent LP Classification") -> (agent advance rate, weight). Canonical
 # per data/reference/agent_lp_categories.csv, so each value maps to itself.
 #
-# The rates MUST match data/reference/agent_rate_map.csv. The export no longer carries an Agent
-# Advance Rate column, so the extract resolves the rate from the category — and these rates are what
-# the Agent Borrowing Base below is computed with. If the two drift apart, the generated file stops
-# reconciling: its Agent BB would not equal the rate the extract assigns x the eligible uncalled.
+# The rate drawn here is written to the export's Agent Advance Rate column AND is what the Agent
+# Borrowing Base below is computed with, so the file reconciles on its own terms. Keep the rates in
+# step with data/reference/agent_rate_map.csv anyway: that map is the extract's fallback for a row
+# whose rate cell the chaos monkey (or a real analyst) left blank.
 AGENT_CATEGORIES = [
     ("Rated Included",            0.90, 30),
     ("Non-Rated Included",        0.75, 34),
@@ -186,7 +188,7 @@ CHAOS_RATES = {
 
 # Never degraded: cash/legal LPA figures plus the facility join keys, which analysts keep exact.
 CHAOS_SACRED = ("AccountID", "FndName", "Commitments", "Called", "Uncalled", "BBDate",
-                "UBSAR", "AgentBB", "UBSBB", "AgentExcessConc", "UBSExcessConc",
+                "UBSAR", "AgentAR", "AgentBB", "UBSBB", "AgentExcessConc", "UBSExcessConc",
                 "PercentOfCommitments", "PercentOfUncalled", "CalledPercent")
 
 _NAME_SUFFIX_RE = re.compile(r",?\s+(LLC|L\.L\.C\.|L\.P\.|LP|Ltd\.?|Inc\.?|Limited)$", re.I)
@@ -529,7 +531,7 @@ def main() -> int:
         r["acct"], r["fund"], r["name"], r["parent"], r["spv"], r["ubs_cls"],
         r["inst"], r["ig"], r["cls"], r["sp_rating"], r["moodys_rating"], r["fitch_rating"],
         r["lp_size_bil"], r["lp_size_criteria"], r["commit"], r["uncalled_capital"], r["ubsar"],
-        r["agent_cl"], r["ubs_cl"], r["pct_commit"], r["called"], r["pct_of_fund_uncalled"],
+        r["agent_ar"], r["agent_cl"], r["ubs_cl"], r["pct_commit"], r["called"], r["pct_of_fund_uncalled"],
         r["called_pct"], r["agent_excess_conc"], r["ubs_excess_conc"],
         r["agent_borrowing_base"], r["ubs_borrowing_base"], "", r["bbdate"],
     ])) for r in positions]

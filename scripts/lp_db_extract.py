@@ -32,6 +32,8 @@ Normalization against the editable lists in pe-sub-jobs/data/reference/:
   * the agent advance rate is read from the export's Agent Advance Rate column and used as
     written; only when that cell is blank - or the column is absent, the one column whose absence is
     not fatal - is it resolved from the row's Agent LP Category (agent_rate_map.csv)
+  * the agent concentration limit follows the same rule against the same file's conc_limit_pct
+    column: the fed Agent Concentration Limit cell wins, a blank one falls back to the category
   * the fed UBSAR is slotted into a discrete rate group via rate_floor_map.csv (>=90 -> 90,
     75-89.9 -> 75, 65-74.9 -> 65, 50-64.9 -> 50, <50 -> 0)
   * LP Size is routed back into the aum / nav / pension_assets column its criteria names, keeping
@@ -96,7 +98,8 @@ SRC_COLS = [
 # Agent Advance Rate is the one column allowed to be ABSENT rather than fatal: workbooks written
 # while it was thought to have been dropped do not carry it, and the row is not lost by its absence -
 # agent_rate_map.csv resolves the rate from the row's Agent LP Category instead. Every other column
-# missing still aborts the run.
+# missing still aborts the run. (AgentCL has the same per-cell fallback but is NOT optional as a
+# column: the export has always carried it, so its absence still reads as a malformed workbook.)
 OPTIONAL_COLS = {"AgentAR"}
 
 # Accepted header spellings per column. Matching runs through _norm(), which lowercases and
@@ -336,6 +339,7 @@ class Reference:
     agent_lookup: dict[str, str]            # norm(alias) -> canonical Agent LP Category
     ubs_lookup: dict[str, str]              # norm(alias) -> canonical UBS LP Classification
     agent_rates: dict[str, float]           # canonical Agent LP Category -> advance rate percent
+    agent_conc_limits: dict[str, float]     # canonical Agent LP Category -> conc limit percent
     rate_floors: list[tuple[float, float]]  # (min_rate_pct, group_pct), sorted highest-min first
 
 
@@ -365,14 +369,23 @@ def load_references(ref_dir: Path) -> Reference:
     ubs_rows = _read_reference_rows(ref_dir / "ubs_lp_categories.csv")[1:]
     ubs_lookup = {_norm(r[0]): r[1] for r in ubs_rows if len(r) >= 2 and r[1]}
 
-    # Agent advance rate by Agent LP Category: the fallback for rows whose Agent Advance Rate
-    # cell is blank, so a rate-less row still gets the rate its category implies.
+    # Agent advance rate AND agent concentration limit by Agent LP Category: the fallbacks for rows
+    # whose Agent Advance Rate / Agent Concentration Limit cell is blank, so a value-less row still
+    # gets what its category implies. The two columns are loaded independently — a row may legally
+    # carry a rate with no limit (short reference row), and the missing one simply has no fallback.
     agent_rates: dict[str, float] = {}
+    agent_conc_limits: dict[str, float] = {}
     for row in _read_reference_rows(ref_dir / "agent_rate_map.csv")[1:]:
         if len(row) < 2:
             continue
         try:
             agent_rates[row[0]] = float(str(row[1]).rstrip("%"))
+        except ValueError:
+            pass
+        if len(row) < 3:
+            continue
+        try:
+            agent_conc_limits[row[0]] = float(str(row[2]).rstrip("%"))
         except ValueError:
             continue
 
@@ -388,7 +401,7 @@ def load_references(ref_dir: Path) -> Reference:
             continue
     rate_floors.sort(key=lambda t: t[0], reverse=True)
 
-    return Reference(agent_lookup, ubs_lookup, agent_rates, rate_floors)
+    return Reference(agent_lookup, ubs_lookup, agent_rates, agent_conc_limits, rate_floors)
 
 
 def map_agent_cls(raw, ref: Reference) -> tuple[str, bool]:
@@ -499,6 +512,29 @@ def agent_rate_frac(raw_rate, raw_category, ref: Reference) -> float | None:
     if not matched or not canon:
         return None
     pct_value = ref.agent_rates.get(canon)
+    return None if pct_value is None else pct_value / 100
+
+
+def agent_conc_limit_frac(raw_limit, raw_category, ref: Reference) -> float | None:
+    """The agent concentration limit for a row, as a fraction. Mirrors agent_rate_frac: the fed
+    Agent Concentration Limit cell wins outright, and only a blank or unparseable cell falls back
+    to the limit the row's canonical Agent LP Category implies (agent_rate_map.csv). None when
+    neither has anything - a made-up limit would be indistinguishable from a fed one.
+
+    normalize_numeric has already brought the cell to LIMIT_COLS shape, where a percent-of-uncalled
+    is a fraction ('7.5%' -> 0.075) but an ABSOLUTE cap stays in dollars ('$25,000,000' -> 25000000)
+    in the very same column. Only the fed value can be an absolute cap, so it is returned untouched
+    and the caller renders it exactly as before; the fallback is always a percent, by definition of
+    the reference file."""
+    if not blank(raw_limit):
+        try:
+            return float(raw_limit)
+        except (TypeError, ValueError):
+            pass                                   # unparseable: fall back to the category
+    canon, matched = map_agent_cls(raw_category, ref)
+    if not matched or not canon:
+        return None
+    pct_value = ref.agent_conc_limits.get(canon)
     return None if pct_value is None else pct_value / 100
 
 
@@ -814,6 +850,9 @@ def build_seed(export: list[dict], name_by_acct: dict[str, str], ref: Reference)
         agent_rate = agent_rate_frac(row["AgentAR"], row["Classification"], ref)
         if agent_rate is None:
             counts["unresolved_agent_rate"] += 1
+        agent_conc = agent_conc_limit_frac(row["AgentCL"], row["Classification"], ref)
+        if agent_conc is None:
+            counts["unresolved_agent_conc_limit"] += 1
 
         seed_rows.append({
             "facility_name": fac_name,
@@ -826,7 +865,9 @@ def build_seed(export: list[dict], name_by_acct: dict[str, str], ref: Reference)
             # 90/75/65/50/0 groups; the agent's schedule is not those groups, so flooring this
             # would silently turn Designated Institutional's 60% into 50%.
             "agent_advance_rate": pct(agent_rate),
-            "agent_concentration_limit": pct(row["AgentCL"]),
+            # Same rule as the rate above: fed by the export, or - for a blank cell - resolved from
+            # the Agent LP Category. Never floor-mapped; the floor map is an advance-rate device.
+            "agent_concentration_limit": pct(agent_conc),
             "parent": as_is(row["Parent"]),
             "spv": yn_bool(row["SPV"]),
             "investor_type": "",
@@ -990,6 +1031,8 @@ def main() -> int:
         ("blank UBS classification", sr.counts["blank_ubs_classification"],
          "fed empty by the export"),
         ("unresolved agent advance rate", sr.counts["unresolved_agent_rate"],
+         "blank in the export and category unmapped: agent_rate_map.csv"),
+        ("unresolved agent conc limit", sr.counts["unresolved_agent_conc_limit"],
          "blank in the export and category unmapped: agent_rate_map.csv"),
     ]
     if any(n for _, n, _ in norm_counts):

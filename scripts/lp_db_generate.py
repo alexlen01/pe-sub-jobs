@@ -128,7 +128,8 @@ TYPE_WEIGHTS = {  # rough real-world mix
 # The rate drawn here is written to the export's Agent Advance Rate column AND is what the Agent
 # Borrowing Base below is computed with, so the file reconciles on its own terms. Keep the rates in
 # step with data/reference/agent_rate_map.csv anyway: that map is the extract's fallback for a row
-# whose rate cell the chaos monkey (or a real analyst) left blank.
+# whose rate cell the chaos monkey (or a real analyst) left blank - and the same file's
+# conc_limit_pct column is the matching fallback for a blank Agent Concentration Limit cell.
 AGENT_CATEGORIES = [
     ("Rated Included",            0.90, 30),
     ("Non-Rated Included",        0.75, 34),

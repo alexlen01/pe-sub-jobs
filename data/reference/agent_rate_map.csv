@@ -1,9 +1,12 @@
-## Agent default advance rate AND agent concentration limit by Agent LP Category. The LP DB Export
-## stopped carrying an Agent Advance Rate column (2026-08-18 format change), so the rate is resolved
-## from the row's Agent LP Category instead of read from the feed; `conc_limit_pct` is the same
-## fallback for a blank Agent Concentration Limit cell. Both MUST mirror the `agent_tiers` config
-## rows (pe-sub-api V1_5__agent_conc_limits.sql) and classification_config.AGENT_RATE_MAP /
-## AGENT_CONC_LIMIT_MAP. Keep in sync with Config.
+## Agent default advance rate AND agent concentration limit by Agent LP Category. Both are
+## FALLBACKS, not the primary source: the LP DB Export carries an Agent Advance Rate column and an
+## Agent Concentration Limit column, and a fed value always wins. A value here is used only when
+## that cell is blank or unparseable - or, for the rate alone, when a workbook omits the column
+## entirely (see lp_db_extract.OPTIONAL_COLS). Both MUST mirror the `agent_tiers` config rows and
+## classification_config.AGENT_RATE_MAP / AGENT_CONC_LIMIT_MAP. Keep in sync with Config.
+##
+## This file also states the CANONICAL Agent LP Categories. A category the export carries that is
+## not listed here is seeded exactly as fed and reported for manual correction - never rewritten.
 ##
 ## rate_pct       — default agent advance rate, percent of the LP's uncalled capital.
 ## conc_limit_pct — default agent concentration limit, percent of TOTAL uncalled capital (the same
@@ -11,7 +14,7 @@
 ##
 ## Rates are used AS WRITTEN and are deliberately NOT put through rate_floor_map.csv: that floor map
 ## exists to tame a dirty fed rate (0.93 -> the 90 group), whereas a value here is already canonical.
-## Flooring it would turn Designated Institutional's 60% into 50%, because 60 is not one of the
+## Flooring it would turn Insitutional Designated Investors' 60% into 50%, because 60 is not one of the
 ## 90/75/65/50/0 groups the UBS side uses. Concentration limits are never floor-mapped at all.
 ## Edit a value here and the seed carries it verbatim.
 ##
@@ -24,8 +27,8 @@
 ## from the UBS side without touching the UBS defaults. Pending business confirmation of the
 ## agent bank's own published limits.
 agent_lp_category,rate_pct,conc_limit_pct
-Rated Included,90,20
-Non-Rated Included,75,15
-Designated Institutional,60,12.5
-Designated PWM,50,5
-Excluded Investor,0,0
+Included Investors (Rated),90,20
+Included Investors (Non-Rated),75,15
+Insitutional Designated Investors,60,12.5
+PWM Designated Investors,50,5
+Excluded Investors,0,0

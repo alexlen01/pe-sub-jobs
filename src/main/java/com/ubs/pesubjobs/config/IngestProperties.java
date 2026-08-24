@@ -11,7 +11,7 @@ public record IngestProperties(
         String lpMasterFile,
         String lpFacilitySeedsFile,
         // Optional classification concentration-limit defaults feed. Blank/absent → the
-        // startup runner skips it (the API's V1_5 migration seeds defaults); the on-demand
+        // startup runner skips it (the API seeds defaults on schema creation); the on-demand
         // /jobs/cls-conc-limits-ingest endpoint works regardless.
         String clsConcLimitsFile,
         // pe-sub-api base URL, used to reload its in-memory config cache after a config feed.

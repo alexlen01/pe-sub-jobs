@@ -47,7 +47,8 @@ public class LpRecordsSeedJobConfig {
                 .transactionManager(txManager)
                 .reader(reader)
                 .writer(writer)
-                .faultTolerant().skip(Exception.class).skipLimit(10)
+                // No skip policy: a row that cannot be written fails the job rather than
+                // vanishing from the load.
                 .build();
     }
 

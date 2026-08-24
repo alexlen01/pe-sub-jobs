@@ -1,0 +1,85 @@
+## Agency rating notch scale, per agency. ONE row per (agency, band, notch).
+##
+## Mirrors bb_criteria_matrix.ratingBands in pe-sub-api config (V1_3__config.sql), which is what
+## BbCriteriaResolver resolves a Rated Investor's band against. The three agencies do NOT share a
+## scale: S&P and Fitch write AA-/BBB+, Moody's writes Aa3/Baa1. Writing an S&P notch into the
+## Moody's column therefore matches no band and clamps the LP to the BBB floor, which silently
+## moves its advance rate and concentration limit - so both scripts read this one file:
+##
+##   lp_db_generate.py  emits notches from the column's OWN agency scale;
+##   lp_db_extract.py   normalizes a dirty cell ('a minus', 'AA MINUS', 'Baa 2') back to the
+##                      canonical notch, so the seed carries a value the platform can band.
+##
+## band     — the bb_criteria_matrix band the notch resolves to. BLANK means sub-investment-grade:
+##            present, in no band, and clamped to subInvestmentGradeBand (BBB) per Q2 - a rated LP
+##            is never reclassified out of Rated Investor.
+##
+## "NR" / "N/R" / "N/A" / "Not Rated" are NOT notches and are deliberately absent: the LP DB Export
+## leaves an unrated agency cell BLANK, and the extract strips those tokens to blank if one appears.
+## Keep in sync with Config.
+agency,band,notch
+sp,AAA,AAA
+sp,AA,AA+
+sp,AA,AA
+sp,AA,AA-
+sp,A,A+
+sp,A,A
+sp,A,A-
+sp,BBB,BBB+
+sp,BBB,BBB
+sp,BBB,BBB-
+sp,,BB+
+sp,,BB
+sp,,BB-
+sp,,B+
+sp,,B
+sp,,B-
+sp,,CCC+
+sp,,CCC
+sp,,CCC-
+sp,,CC
+sp,,C
+sp,,D
+moodys,AAA,Aaa
+moodys,AA,Aa1
+moodys,AA,Aa2
+moodys,AA,Aa3
+moodys,A,A1
+moodys,A,A2
+moodys,A,A3
+moodys,BBB,Baa1
+moodys,BBB,Baa2
+moodys,BBB,Baa3
+moodys,,Ba1
+moodys,,Ba2
+moodys,,Ba3
+moodys,,B1
+moodys,,B2
+moodys,,B3
+moodys,,Caa1
+moodys,,Caa2
+moodys,,Caa3
+moodys,,Ca
+moodys,,C
+fitch,AAA,AAA
+fitch,AA,AA+
+fitch,AA,AA
+fitch,AA,AA-
+fitch,A,A+
+fitch,A,A
+fitch,A,A-
+fitch,BBB,BBB+
+fitch,BBB,BBB
+fitch,BBB,BBB-
+fitch,,BB+
+fitch,,BB
+fitch,,BB-
+fitch,,B+
+fitch,,B
+fitch,,B-
+fitch,,CCC+
+fitch,,CCC
+fitch,,CCC-
+fitch,,CC
+fitch,,C
+fitch,,D

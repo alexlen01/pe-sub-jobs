@@ -19,6 +19,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
  * The LP record seed job passes the raw feed rows to pe-sub-api verbatim — name resolution,
@@ -46,7 +47,7 @@ class SeedAndConfigJobsTest extends IntegrationTestBase {
         // excess-concentration columns arrived with the 2026-08-18 format.
         JobExecution execution = run(lpRecordsSeedJob, """
                 "facility_name","investor_name","capital_commitment","uncalled_capital","agent_lp_category","agent_advance_rate","agent_concentration_limit","parent","spv","investor_type","institutional_or_hnw","region_location","investment_grade","ubs_lp_category","sp_rating","moodys_rating","fitch_rating","aum","nav","pension_assets","funding_ratio","pct_of_fund_commitments","called_capital","pct_of_fund_uncalled","pct_lp_called","ubs_concentration_limit","ubs_advance_rate","agent_excess_concentration","ubs_excess_concentration","agent_borrowing_base","ubs_borrowing_base","notes"
-                "Carlyle Buyout Umbrella","Acme Pension Fund","$250M","$75M","Rated Included","90%","5%","Acme Holdings","FALSE","Pension Fund","Institutional","United States","TRUE","Rated Investor","AA","Aa2","AA","$10B","$8B","$9B","105%","3%","$175M","2%","70%","4%","90%","$2.5M","$1.5M","$67.5M","$67.5M","seed note"
+                "Carlyle Buyout Umbrella","Acme Pension Fund","$250M","$75M","Included Investors (Rated)","90%","5%","Acme Holdings","FALSE","Pension Fund","Institutional","United States","TRUE","Rated Investor","AA","Aa2","AA","$10B","$8B","$9B","105%","3%","$175M","2%","70%","4%","90%","$2.5M","$1.5M","$67.5M","$67.5M","seed note"
                 "KKR Ascendant","Beta Capital LLC","$100M","$40M","Designated","50%","15%"
                 """);
 
@@ -61,7 +62,7 @@ class SeedAndConfigJobsTest extends IntegrationTestBase {
         assertThat(full.investorName()).isEqualTo("Acme Pension Fund");
         assertThat(full.capitalCommitment()).isEqualTo("$250M");
         assertThat(full.uncalledCapital()).isEqualTo("$75M");
-        assertThat(full.agentLpCategory()).isEqualTo("Rated Included");
+        assertThat(full.agentLpCategory()).isEqualTo("Included Investors (Rated)");
         assertThat(full.parent()).isEqualTo("Acme Holdings");
         assertThat(full.spv()).isEqualTo("FALSE");
         assertThat(full.investorType()).isEqualTo("Pension Fund");
@@ -97,24 +98,33 @@ class SeedAndConfigJobsTest extends IntegrationTestBase {
     }
 
     @Test
-    void clsConcLimits_mergesParsedMap_droppingInvalidRows() throws Exception {
+    void clsConcLimits_mergesParsedMap() throws Exception {
         JobExecution execution = run(clsConcLimitIngestJob, """
                 "classification","limit_pct"
                 "Rated Investor","15%"
                 "Unrated NAV > $1Bn","7.5"
-                "Bad Row","not-a-number"
-                "","5"
-                "Excluded","250"
                 """);
 
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
 
-        // Blank classification, unparseable percent, and out-of-range percent (250) are dropped.
         ArgumentCaptor<Map<String, Double>> captor = ArgumentCaptor.captor();
         verify(apiClient).mergeClsConcLimitDefaults(captor.capture());
         assertThat(captor.getValue()).containsExactly(
                 Map.entry("Rated Investor", 15.0),
                 Map.entry("Unrated NAV > $1Bn", 7.5));
+    }
+
+    @Test
+    void clsConcLimits_invalidRowFailsTheJobRatherThanDroppingOutOfIt() throws Exception {
+        // An out-of-range percent: the run stops instead of quietly merging a partial map.
+        JobExecution execution = run(clsConcLimitIngestJob, """
+                "classification","limit_pct"
+                "Rated Investor","15%"
+                "Excluded","250"
+                """);
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.FAILED);
+        verifyNoInteractions(apiClient);
     }
 
     private JobExecution run(Job job, String csv) throws Exception {

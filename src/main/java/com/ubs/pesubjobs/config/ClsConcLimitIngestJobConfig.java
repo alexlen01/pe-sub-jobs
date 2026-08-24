@@ -54,9 +54,8 @@ public class ClsConcLimitIngestJobConfig {
                 .reader(clsConcLimitReader)
                 .processor(clsConcLimitProcessor)
                 .writer(clsConcLimitWriter)
-                .faultTolerant()
-                .skip(Exception.class)
-                .skipLimit(10)
+                // No skip policy: a row that cannot be written fails the job rather than
+                // vanishing from the load.
                 .build();
     }
 

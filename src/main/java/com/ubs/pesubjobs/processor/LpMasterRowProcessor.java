@@ -8,9 +8,10 @@ public class LpMasterRowProcessor implements ItemProcessor<LpMasterRow, Processe
 
     @Override
     public ProcessedLpMaster process(LpMasterRow item) {
-        if (item.investorName() == null || item.investorName().isBlank()) return null;
+        // A nameless row is not filtered out here: the API rejects it and the job fails, rather
+        // than the row leaving the load unnoticed.
         return new ProcessedLpMaster(
-                item.investorName().trim(),
+                blankToNull(item.investorName()),
                 blankToNull(item.parent()),
                 parseBool(item.spv()),
                 blankToNull(item.investorType()),

@@ -64,9 +64,8 @@ public class LpMasterIngestJobConfig {
                 .reader(lpMasterReader)
                 .processor(lpMasterProcessor)
                 .writer(lpMasterWriter)
-                .faultTolerant()
-                .skip(Exception.class)
-                .skipLimit(10)
+                // No skip policy: a row that cannot be written fails the job rather than
+                // vanishing from the load.
                 .build();
     }
 

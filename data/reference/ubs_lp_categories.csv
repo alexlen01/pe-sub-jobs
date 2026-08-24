@@ -14,7 +14,7 @@
 alias,canonical
 Rated Investor,Rated Investor
 Rated,Rated Investor
-Rated Included,Rated Investor
+Included Investors (Rated),Rated Investor
 Corp Pension > $5Bn Assets,Corp Pension > $5Bn Assets
 Corporate Pension > $5Bn Assets,Corp Pension > $5Bn Assets
 Corp Pension >5Bn,Corp Pension > $5Bn Assets
@@ -38,6 +38,6 @@ HNW (acceptable),HNW (acceptable)
 HNW,HNW (acceptable)
 HNW Acceptable,HNW (acceptable)
 Excluded,Excluded
-Excluded Investor,Excluded
+Excluded Investors,Excluded
 Ineligible,Excluded
 Ineligible Investor,Excluded

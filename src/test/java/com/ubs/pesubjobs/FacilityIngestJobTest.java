@@ -65,17 +65,22 @@ class FacilityIngestJobTest extends IntegrationTestBase {
     }
 
     @Test
-    void rowsWithoutNameOrAgentBank_areFilteredBeforeTheApiCall() throws Exception {
+    void rowsWithoutNameOrAgentBank_stillReachTheApi() throws Exception {
+        // Neither a missing agent bank nor a missing name is filtered out here; both are filled
+        // in by the API, which owns the constraints.
         JobExecution execution = runFeed("""
                 "agent_bank","name","account_number","loan_amount","maturity_date","bank_status","bank_status_date","ubs_participation","collateral_date"
                 "Bank of America","HIG LBO IV","5VX1796","75000000","10/26/2026","Active","5/21/2026","9502500.00","2026-06-09"
                 "","Nameless Agent Facility","X","1","2026-01-01","Active","2026-01-01","1","2026-01-01"
+                "Bank of America","","5VX9999","1","2026-01-01","Active","2026-01-01","1","2026-01-01"
                 """);
 
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
-        assertThat(capturedFacilityRows())
+        List<ProcessedFacility> rows = capturedFacilityRows();
+        assertThat(rows)
                 .extracting((ProcessedFacility f) -> f.name())
-                .containsExactly("HIG LBO IV");
+                .containsExactly("HIG LBO IV", "Nameless Agent Facility", null);
+        assertThat(rows.get(1).agentBank()).isNull();
     }
 
     private List<ProcessedFacility> capturedFacilityRows() {

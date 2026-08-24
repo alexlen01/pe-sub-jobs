@@ -24,11 +24,11 @@ public class FacilityRowProcessor implements ItemProcessor<FacilityRow, Processe
 
     @Override
     public ProcessedFacility process(FacilityRow item) {
-        if (item.name() == null || item.name().isBlank()) return null;
-        if (item.agentBank() == null || item.agentBank().isBlank()) return null;
+        // A blank name or agent bank is not a reason to drop a facility; both are filled in
+        // where the constraints live, on the API side.
         return new ProcessedFacility(
-                item.agentBank().trim(),
-                item.name().trim(),
+                blankToNull(item.agentBank()),
+                blankToNull(item.name()),
                 blankToNull(item.accountNumber()),
                 parseDecimal(item.loanAmount()),
                 parseDate(item.maturityDate()),

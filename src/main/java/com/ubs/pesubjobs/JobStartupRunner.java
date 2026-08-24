@@ -66,7 +66,7 @@ public class JobStartupRunner implements ApplicationRunner {
         runJob("facility-ingest", facilityIngestJob, ingestProperties.facilityFile());
         runJob("lp-master-ingest", lpMasterIngestJob, ingestProperties.lpMasterFile());
         runJob("lp-records-seed", lpRecordsSeedJob, ingestProperties.lpFacilitySeedsFile());
-        // Optional feed: the API's V1_5 migration seeds class defaults, so this only runs
+        // Optional feed: the API seeds class defaults on schema creation, so this only runs
         // when a feed file is explicitly configured (CLS_CONC_LIMITS_FILE).
         String clsConcFile = ingestProperties.clsConcLimitsFile();
         if (clsConcFile != null && !clsConcFile.isBlank()) {

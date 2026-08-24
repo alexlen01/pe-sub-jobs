@@ -8,9 +8,16 @@ public class ClsConcLimitRowProcessor implements ItemProcessor<ClsConcLimitRow, 
 
     @Override
     public ProcessedClsConcLimit process(ClsConcLimitRow item) {
-        if (item.classification() == null || item.classification().isBlank()) return null;
+        // Invalid config fails the job rather than dropping out of it unnoticed.
+        if (item.classification() == null || item.classification().isBlank()) {
+            throw new IllegalArgumentException("Concentration-limit row names no classification.");
+        }
         double pct = parsePct(item.limitPct());
-        if (pct < 0 || pct > 100) return null;
+        if (pct < 0 || pct > 100) {
+            throw new IllegalArgumentException("Concentration limit for "
+                    + item.classification().trim() + " is not a percent between 0 and 100: "
+                    + item.limitPct());
+        }
         return new ProcessedClsConcLimit(normalizeDashes(item.classification().trim()), pct);
     }
 

@@ -465,13 +465,13 @@ class ExcelAnalyzer:
         if "exclud" in norm or "ineligible" in norm:
             return "Ineligible Investors", "medium"
         if "designated" in norm and "pwm" in norm:
-            return "Designated PWM", "medium"
+            return "PWM Designated Investors", "medium"
         if "designated" in norm or "institutional" in norm:
-            return "Designated Institutional", "medium"
+            return "Insitutional Designated Investors", "medium"
         if ("non" in norm and "rated" in norm) or "unrated" in norm:
-            return "Non-Rated Included", "medium"
+            return "Included Investors (Non-Rated)", "medium"
         if "rated" in norm or "includ" in norm:
-            return "Rated Included", "medium"
+            return "Included Investors (Rated)", "medium"
         return verbatim, "low"   # verbatim self-map (e.g. a sleeve/feeder section header)
 
     # ── Row-skip detection — broader than banner-only: any row after the header whose FIRST
@@ -502,7 +502,7 @@ class ExcelAnalyzer:
         3. Detect rows with all same value repeated (formatting junk)
         4. Detect rows with ONLY single explanatory words
 
-        Single-cell rows are generally legitimate group headers (Rated Included, Non-Rated, etc.),
+        Single-cell rows are generally legitimate group headers (Included Investors (Rated), Included Investors (Non-Rated), etc.),
         so we only flag them if they contain explicit metadata keywords. This prevents false positives
         on legitimate group classifications while catching Legend/Notes rows.
 

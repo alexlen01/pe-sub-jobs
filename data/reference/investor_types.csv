@@ -3,18 +3,13 @@
 ## One canonical value per row; '#'/'##' comment lines and blank lines are ignored. Add known raw
 ## spellings/labels to investor_type_aliases.csv (not here).
 investor_type
-Pension Fund
-Endowment
-Foundation
-Family Office
-Fund of Funds
 Sovereign Wealth Fund
+Public Pension Fund
+Private Pension Fund
 Insurance Company
-Healthcare
-Corporate
-Public Pension
-Investment Consultant
-Institutional Investor
-Hedge Fund
-Other Institutional
-HNW
+Bank Holding Company / Financial Institution
+Endowment & Foundation
+Fund of Funds
+Family Office
+High Net Worth Individual
+Affiliate / GP Entity

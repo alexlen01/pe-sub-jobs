@@ -1,15 +1,24 @@
 ## Supported Investor Types — canonical values the extract normalizes into. Mirrors
-## classification_config.INVESTOR_TYPE_OPTS (pe-sub-api V1_3__config.sql). Keep in sync with Config.
+## classification_config.INVESTOR_TYPE_OPTS. Keep in sync with Config: the LP Master screen builds
+## its Investor Type filter from the DISTINCT values in the table, so a canonical this list states
+## and the platform does not becomes a dropdown entry nothing can be filed under.
+## Investor Type is the industry/sector profile. It is NOT the LP Category (the bank's borrowing
+## base risk bucket) and NOT the LP Classification (the regulatory status QP/QIB/ERISA).
 ## One canonical value per row; '#'/'##' comment lines and blank lines are ignored. Add known raw
 ## spellings/labels to investor_type_aliases.csv (not here).
 investor_type
-Sovereign Wealth Fund
-Public Pension Fund
-Private Pension Fund
-Insurance Company
-Bank Holding Company / Financial Institution
-Endowment & Foundation
-Fund of Funds
+Pension Fund
+Public Pension
+Endowment
+Foundation
 Family Office
-High Net Worth Individual
-Affiliate / GP Entity
+Fund of Funds
+Sovereign Wealth Fund
+Insurance Company
+Healthcare
+Corporate
+Investment Consultant
+Institutional Investor
+Hedge Fund
+Other Institutional
+HNW

@@ -6,8 +6,13 @@ used by pe-sub-jobs:
     data/out/lp_facility_seeds.csv
     data/out/facilities.csv
 
-The LP input is the 30-column export format. Columns are matched by header, and common analyst
-entry variations are tolerated. A facility is identified by the (AccountID, FndName) pair.
+The LP input is the LP DB Export. Columns are matched by header, and common analyst entry
+variations are tolerated. A facility is identified by the (AccountID, FndName) pair.
+
+V2 of the format adds Region and Investor Type back to the 30 columns the 2026-08-18 format
+carried. Both are read as OPTIONAL, so a V1 workbook - and the platform's own 30-column LP Records
+export - still parses; a V1 row simply states neither, which reads downstream as "not resubmitted"
+and leaves whatever LP Master already holds untouched.
 
 Usage (no command-line arguments): set EXPORT_FILE below, then run from any directory:
     python pe-sub-jobs/scripts/lp_db_extract.py
@@ -36,18 +41,21 @@ DATA_DIR = JOBS_ROOT / "data"
 # ============================================================================================
 #  EDIT THIS for each run — the LP DB Export to process. Absolute, or relative to pe-sub-jobs/.
 # ============================================================================================
-EXPORT_FILE = DATA_DIR / "import" / "LP DB Export 2026.08.23.xlsx"
+EXPORT_FILE = DATA_DIR / "import" / "LP DB Export 2026.08.25.xlsx"
 
 AGENT_BANK_SUMMARY_FILE = DATA_DIR / "import" / "AgentBankSummaryRpt.xlsx"
 OUT_DIR = DATA_DIR / "out"              # all outputs land here
 REFERENCE_DIR = DATA_DIR / "reference"  # normalization lists
 
 # --- source columns -------------------------------------------------------------------------
-# Internal names for the export's 30 columns, in the order the 2026-08-18 format lists them.
+# Internal names for the export's columns, in the order the V2 format lists them. Region and
+# Investor Type are the two V2 additions and sit where V2 puts them - after Parent, and after UBS
+# LP Classification.
 # Columns are located BY HEADER, not by position (see SRC_HEADERS / read_export), so a further
 # reshuffle needs no code change - only a new spelling needs one.
 SRC_COLS = [
-    "AccountID", "FndName", "InvestorName", "Parent", "SPV", "UbsClassification",
+    "AccountID", "FndName", "InvestorName", "Parent", "Region", "SPV", "UbsClassification",
+    "InvestorType",
     "InstitutionalHNW", "InvestmentGrade", "Classification", "SP", "Moodys", "Fitch",
     "LpSizeBil", "LpSizeCriteria", "Commitments", "Uncalled", "UBSAR", "AgentAR",
     "AgentCL", "UBSCL",
@@ -60,7 +68,11 @@ SRC_COLS = [
 # agent_rate_map.csv resolves the rate from the row's Agent LP Category instead. Every other column
 # missing still aborts the run. (AgentCL has the same per-cell fallback but is NOT optional as a
 # column: the export has always carried it, so its absence still reads as a malformed workbook.)
-OPTIONAL_COLS = {"AgentAR"}
+# Region and Investor Type join it for a different reason: they are the V2 additions, so every
+# workbook written to the 30-column format predates them. Treating their absence as fatal would
+# reject the entire back catalogue - and the platform's own LP Records export, which still writes
+# the 30-column shape - to gain nothing: a column that is not there states nothing about any row.
+OPTIONAL_COLS = {"AgentAR", "Region", "InvestorType"}
 
 # Accepted header spellings per column. Matching runs through _norm(), which lowercases and
 # collapses every run of non-alphanumerics to one space - so it absorbs the format's own quirks
@@ -79,9 +91,13 @@ SRC_HEADERS = {
     "FndName":              ["FndName", "Fund Name", "Facility Name"],
     "InvestorName":         ["Investor Name", "InvestorName"],
     "Parent":               ["Parent", "Parent / Sponsor"],
+    # "Region" is V2's spelling; "Region / Location" is what the pre-2026-08-18 export and the
+    # platform's LP Master export both write for the same field.
+    "Region":               ["Region", "Region / Location", "Region/Location", "Location"],
     "SPV":                  ["SPV", "SPV Flag"],
     "UbsClassification":    ["UBS LP Classification", "UBS (Internal) LP Classification",
                              "UBS Classification", "UBS LP Category"],
+    "InvestorType":         ["Investor Type", "InvestorType", "LP Type"],
     "InstitutionalHNW":     ["Insitutional vs HNW", "Institutional vs HNW", "InstitutionalHNW"],
     "InvestmentGrade":      ["Investment Grade?", "Investment Grade", "InvestmentGrade"],
     "Classification":       ["Agent LP Classification", "Classification", "Agent LP Category"],
@@ -110,12 +126,13 @@ SRC_HEADERS = {
 
 # Columns the 2026-08-18 format dropped, kept here only so a stale workbook is diagnosed with a
 # useful message instead of a bare "missing column" list. None of them feed the outputs any more:
-#   InvestorType / Region / HQ  - HQ is gone from the platform feed entirely; investor type and
-#                                 region stay in the schema but are governed outside this feed.
+#   HQ                          - gone from the platform feed entirely.
 #   AUM / NAV / PensionAssets   - superseded by LP Size ($ Bil) + LP Size Criteria.
 #   FundingRatio                - no longer sourced.
+# Investor Type and Region were on this list until V2 brought them back; they are read columns
+# again and their old "Region / Location" spelling is an accepted alias above.
 RETIRED_HEADERS = {
-    "InvestorType": "Investor Type", "Region": "Region / Location", "HQ": "High Quality",
+    "HQ": "High Quality",
     "AUM": "AUM", "NAV": "NAV", "PensionAssets": "Pension Assets",
     "FundingRatio": "Funded Ratio (%)",
 }
@@ -173,11 +190,11 @@ def normalize_numeric(col: str, v):
 # CSV header (column) orders required by the pe-sub-jobs FlatFileItemReaders.
 # high_quality is gone: the export no longer carries it, and nothing else supplies it. The platform
 # keeps its own column on the schema default (TRUE) rather than being fed a fabricated value.
-# investor_type, region_location and funding_ratio stay in the header but go out BLANK from this
-# feed - the 2026-08-18 format dropped them and they are governed elsewhere (LP Master is a
-# bank-wide store; investor type and ratings are analyst-compiled from Pitchbook and the agencies).
-# Keeping the columns means pe-sub-api's contract is unchanged and a value already on an LP Master
-# record is not clobbered by this feed.
+# investor_type and region_location are fed again from V2's two new columns. They still go out
+# blank for a V1 workbook that states neither, which is not the same as clearing them: pe-sub-api
+# reads a blank as "not resubmitted" and keeps what LP Master already holds.
+# funding_ratio stays in the header but goes out BLANK from this feed either way - no column
+# implies it and it is governed elsewhere.
 MASTER_COLS = [
     "investor_name", "parent", "spv", "investor_type", "institutional_or_hnw",
     "region_location", "investment_grade", "sp_rating", "moodys_rating", "fitch_rating", "aum", "nav", "pension_assets",
@@ -205,6 +222,9 @@ ABS_COLS = [
     "FacilityStatus", "FacilityStatusDate",
 ]
 ABS_TOTAL_MARKER = "accesstotalsloanamount"  # _norm() prefix of the subtotal / grand-total rows
+# _norm() of the FacilityStatus that onboards a reported facility as Active on the report's word
+# alone, with no export match behind it. Every other spelling reads as not-Active.
+ABS_ACTIVE_STATUS = "active"
 
 
 # --- formatting helpers --------------------------------------------------------------------
@@ -307,6 +327,7 @@ def clean_name(value) -> str:
 class Reference:
     agent_categories: set[str]              # norm(canonical Agent LP Classification)
     ubs_lookup: dict[str, str]              # norm(alias) -> canonical UBS LP Classification
+    itype_lookup: dict[str, str]            # norm(alias or canonical) -> canonical Investor Type
     agent_rates: dict[str, float]           # norm(Agent LP Category) -> advance rate percent
     agent_conc_limits: dict[str, float]     # norm(Agent LP Category) -> conc limit percent
     rate_floors: list[tuple[float, float]]  # (min_rate_pct, group_pct), sorted highest-min first
@@ -330,9 +351,16 @@ def _read_reference_rows(path: Path) -> list[list[str]]:
 
 
 def load_references(ref_dir: Path) -> Reference:
-    # investor_types.csv / investor_type_aliases.csv are no longer read: the 2026-08-18 export
-    # dropped the Investor Type column, so there is nothing here to normalize. The files stay in
-    # data/reference/ because they mirror classification_config.INVESTOR_TYPE_OPTS for the platform.
+    # Investor Type, back as a column in V2. The canonical list mirrors the platform's
+    # INVESTOR_TYPE_OPTS, so a normalized value is one the LP Master screen's dropdown already
+    # offers; the alias list carries the spellings the banks write for those same types. Canonicals
+    # are seeded into the lookup first so an alias row can never shadow one.
+    itype_canonical = [r[0] for r in _read_reference_rows(ref_dir / "investor_types.csv")[1:] if r[0]]
+    itype_lookup = {_norm(c): c for c in itype_canonical}
+    for row in _read_reference_rows(ref_dir / "investor_type_aliases.csv")[1:]:
+        if len(row) >= 2 and row[1] and _norm(row[0]) not in itype_lookup:
+            itype_lookup[_norm(row[0])] = row[1]
+
     ubs_rows = _read_reference_rows(ref_dir / "ubs_lp_categories.csv")[1:]
     ubs_lookup = {_norm(r[0]): r[1] for r in ubs_rows if len(r) >= 2 and r[1]}
 
@@ -378,8 +406,8 @@ def load_references(ref_dir: Path) -> Reference:
     rate_floors.sort(key=lambda t: t[0], reverse=True)
 
     # The Agent Advance Rate Schedule states the canonical Agent LP Classifications.
-    return Reference(set(agent_rates), ubs_lookup, agent_rates, agent_conc_limits, rate_floors,
-                     rating_notches)
+    return Reference(set(agent_rates), ubs_lookup, itype_lookup, agent_rates, agent_conc_limits,
+                     rate_floors, rating_notches)
 
 
 def check_agent_cls(raw, ref: Reference) -> tuple[str, bool]:
@@ -451,6 +479,23 @@ def map_ubs_cls(raw, ref: Reference) -> tuple[str, bool]:
     if not s:
         return "", True
     canon = ref.ubs_lookup.get(_norm(s))
+    return (canon, True) if canon else (s, False)
+
+
+# --- investor type --------------------------------------------------------------------------
+# Distinct from both LP Category (the bank's borrowing-base risk bucket) and LP Classification (the
+# regulatory status): this is the industry/sector profile - pension, endowment, SWF - and the three
+# are never interchangeable. Normalizing matters here because the LP Master screen's Investor Type
+# filter is built from the DISTINCT values in the table, so every unmapped spelling of one type
+# becomes another entry in that dropdown.
+def map_investor_type(raw, ref: Reference) -> tuple[str, bool]:
+    """(canonical Investor Type, True) when the fed value is one the platform states or a known
+    spelling of one; otherwise the ORIGINAL value with (value, False). Same contract as
+    map_ubs_cls - the record is always kept and an unrecognised type is reported, never dropped."""
+    s = as_is(raw)
+    if not s:
+        return "", True
+    canon = ref.itype_lookup.get(_norm(s))
     return (canon, True) if canon else (s, False)
 
 
@@ -624,8 +669,10 @@ def read_export(path: Path, sheet: str | None = None) -> list[dict]:
             column_at.setdefault(col, i)
     missing = [c for c in SRC_COLS if c not in column_at and c not in OPTIONAL_COLS]
     if missing:
-        # A stale pre-2026-08-18 workbook fails on exactly the five added columns, so name them and
-        # say which retired ones are present - far more useful than a bare missing-column list.
+        # A stale pre-2026-08-18 workbook fails on the columns that format did not carry, so name
+        # them and say which retired ones are present - far more useful than a bare missing-column
+        # list. Region and Investor Type are NOT among them: they are optional, so their absence
+        # never reaches here and a V1 workbook parses instead of being diagnosed.
         found_retired = [h for h in header
                          if _norm(h) in {_norm(v) for v in RETIRED_HEADERS.values()}]
         hint = ""
@@ -661,12 +708,13 @@ def read_agent_bank_summary(path: Path) -> tuple[list[list[str]], dict[str, int]
       * each group ends with an 'AccessTotalsLoanAmount:' subtotal row carrying no facility.
 
     Dirty rows are absorbed rather than fatal: a repeated (AccountNumber, Borrower) pair is a
-    reprint and is dropped; a Borrower name already taken by a different account is suffixed with
-    its AccountID; one AccountNumber listed against two borrowers yields two facilities.
+    reprint and is dropped; one AccountNumber listed against two borrowers yields two facilities.
+    Borrower names are carried exactly as printed - two accounts may share one, and separating
+    them is upsert_facilities' final pass, which sees the placeholder facilities too.
 
     ubs_participation and collateral_date are not in the report — collateral_date is filled from
-    the export's BBDate by upsert_facilities. bank_status comes from FacilityStatus here and is
-    then overridden by upsert_facilities with the export-match result."""
+    the export's BBDate by upsert_facilities. bank_status is the report's own FacilityStatus,
+    carried as printed; upsert_facilities normalises it and decides the final value."""
     if not path.is_file():
         raise SystemExit(
             f"Agent Bank Summary report not found: {path}\n"
@@ -687,7 +735,6 @@ def read_agent_bank_summary(path: Path) -> tuple[list[list[str]], dict[str, int]
     data: list[list[str]] = []
     by_acct: "OrderedDict[str, list[tuple[int, str]]]" = OrderedDict()
     seen_pair: set[tuple[str, str]] = set()
-    used_norm: set[str] = set()
     agent = ""
 
     for raw in rows_iter:
@@ -706,10 +753,7 @@ def read_agent_bank_summary(path: Path) -> tuple[list[list[str]], dict[str, int]
         if (acct, _norm(name)) in seen_pair:              # reprint of a row already taken
             continue
         seen_pair.add((acct, _norm(name)))
-        printed = _norm(name)                             # pre-suffix, for the FndName join below
-        if printed in used_norm:
-            name = f"{name} ({acct})"
-        used_norm.add(_norm(name))
+        printed = _norm(name)                             # for the FndName join below
         # The row's own Agent cell wins if the report fills it; otherwise the carried-down header.
         # "Unknown" satisfies FacilityRowProcessor's non-blank agent_bank rule.
         data.append([text[0] or agent or "Unknown", name, acct, text[3], iso_date(cells[5]),
@@ -794,12 +838,15 @@ def build_master(export: list[dict], ref: Reference) -> list[dict]:
             "investor_name": name,
             "parent": clean_name(_latest(rows, "Parent")),
             "spv": yn_bool(_latest(rows, "SPV")),
-            # investor_type / region_location / funding_ratio left blank: the 2026-08-18 export
-            # dropped them and no other column implies them. Blank means "not resubmitted", which
-            # pe-sub-api treats as "keep what LP Master already holds" - not as a clearing edit.
-            "investor_type": "",
+            # Both fed by V2's new columns, and both blank for a V1 workbook that has neither.
+            # Blank means "not resubmitted", which pe-sub-api treats as "keep what LP Master
+            # already holds" - not as a clearing edit. funding_ratio below is blank either way: no
+            # column implies it in either version.
+            "investor_type": map_investor_type(_latest(rows, "InvestorType"), ref)[0],
             "institutional_or_hnw": _latest(rows, "InstitutionalHNW"),
-            "region_location": "",
+            # Free text, deliberately: region is a label the bank writes, not a governed
+            # vocabulary here, so it is carried as fed rather than forced onto a list.
+            "region_location": _latest(rows, "Region"),
             "investment_grade": yn_bool(_latest(rows, "InvestmentGrade")),
             "sp_rating": normalize_rating(_latest(rows, "SP"), "sp", ref)[0],
             "moodys_rating": normalize_rating(_latest(rows, "Moodys"), "moodys", ref)[0],
@@ -872,8 +919,11 @@ def build_seed(export: list[dict], name_by_key: dict[tuple[str, str], str],
 
         agent_cls, agent_matched = check_agent_cls(row["Classification"], ref)
         ubs_cls, ubs_matched = map_ubs_cls(row["UbsClassification"], ref)
+        itype, itype_matched = map_investor_type(row["InvestorType"], ref)
         if not agent_matched:
             counts["unmatched_agent_category"] += 1
+        if not itype_matched:
+            counts["unmatched_investor_type"] += 1
         if not ubs_matched:
             counts["unmatched_ubs_classification"] += 1
         if not as_is(row["UbsClassification"]):
@@ -902,9 +952,9 @@ def build_seed(export: list[dict], name_by_key: dict[tuple[str, str], str],
             "agent_concentration_limit": pct(agent_conc),
             "parent": clean_name(row["Parent"]),
             "spv": yn_bool(row["SPV"]),
-            "investor_type": "",
+            "investor_type": itype,
             "institutional_or_hnw": as_is(row["InstitutionalHNW"]),
-            "region_location": "",
+            "region_location": as_is(row["Region"]),
             "investment_grade": yn_bool(row["InvestmentGrade"]),
             "ubs_lp_category": ubs_cls,
             "sp_rating": ratings["sp"],
@@ -934,9 +984,15 @@ def build_seed(export: list[dict], name_by_key: dict[tuple[str, str], str],
 def upsert_facilities(fac_data: list[list[str]], by_acct: dict[str, list[tuple[int, str]]],
                       export: list[dict]) -> tuple[list[list[str]], dict[tuple[str, str], str]]:
     """Facilities from the Agent Bank Summary, joined to the export by (AccountID, FndName).
-    bank_status := Active for a report row an export facility claims (which also gets
-    collateral_date := that facility's most recent BBDate), Inactive otherwise, overriding the
-    report's own FacilityStatus.
+    bank_status := Active when EITHER the report states the facility is Active, OR an export
+    facility claims the report row (which also gets collateral_date := that facility's most
+    recent BBDate). Inactive otherwise.
+
+    The report is the bank's own record of what it lends against, so a facility it reports as
+    Active is onboarded Active whether or not the export happens to carry LPs for it: a live
+    facility with no LP records yet - newly originated, or an export cycle that simply did not
+    include it - is an empty facility, not a closed one. The export match only ever promotes a
+    status; it never demotes one the report calls Active.
 
     The join runs per account in two passes, because the two files spell facilities differently:
 
@@ -949,8 +1005,12 @@ def upsert_facilities(fac_data: list[list[str]], by_acct: dict[str, list[tuple[i
     with agent bank "Unknown", carrying what the export knows - name=FndName,
     account_number=AccountID, collateral_date=last BB date - so its LP records still seed.
 
-    Facility names are made unique here: the seed feed resolves a facility by name alone, so two
-    facilities sharing one would send a facility's LPs to the other.
+    Facility names are made unique here, because the seed feed resolves a facility by name alone
+    and the platform keys facilities by name: two facilities sharing one would send a facility's
+    LPs to the other. A facility keeps its printed name unless another facility would share it;
+    when several would, EVERY one of them is suffixed with its account number. Suffixing all of
+    them rather than only the later ones is what makes the pair visible as a pair - otherwise one
+    facility silently keeps the bare name and its sibling reads as a variant of it.
 
     Returns (rows, facility_key -> resolved facility name)."""
     # A facility's Last BB date is the most recent BB run across its rows: the export is not
@@ -973,7 +1033,6 @@ def upsert_facilities(fac_data: list[list[str]], by_acct: dict[str, list[tuple[i
                 fnd_by_key[key] = as_is(row["FndName"])
 
     out = [list(r) for r in fac_data]
-    name_by_key: dict[tuple[str, str], str] = {}
 
     # --- join: claim report rows for export facilities, account by account --------------------
     keys_by_acct: "OrderedDict[str, list[tuple[str, str]]]" = OrderedDict()
@@ -996,43 +1055,50 @@ def upsert_facilities(fac_data: list[list[str]], by_acct: dict[str, list[tuple[i
                 continue
             claimed[key] = free.pop(0)[0]
 
-    for key, idx in claimed.items():
-        name_by_key[key] = out[idx][1].strip()
-
-    # Status is per report row, off whether an export facility claimed it: a borrower the export
-    # never lists is Inactive, not Active because a sibling on the same account number is.
+    # Status is per report row: the report's own FacilityStatus, promoted to Active by an export
+    # match. A borrower the report does NOT call Active and the export never lists is Inactive -
+    # not Active because a sibling on the same account number is.
     key_by_row = {idx: key for key, idx in claimed.items()}
     for i, row in enumerate(out):
         key = key_by_row.get(i)
-        if key is None:
-            row[5] = "Inactive"
-            continue
-        row[5] = "Active"
-        if bbdate_by_key[key]:
+        row[5] = "Active" if (key is not None or _norm(row[5]) == ABS_ACTIVE_STATUS) else "Inactive"
+        if key is not None and bbdate_by_key[key]:
             row[8] = bbdate_by_key[key]
 
     # --- orphan export facilities -> placeholders ---------------------------------------------
     # A key with a blank AccountID lands here too, with a blank account_number - which is the only
     # way such a row reaches the platform.
-    used_norm = {_norm(r[1]) for r in out if len(r) > 1 and r[1].strip()}
+    row_by_key: dict[tuple[str, str], int] = dict(claimed)
     for key in bbdate_by_key:
-        if key in name_by_key:
+        if key in row_by_key:
             continue
         acctno = acctno_by_key[key]
         name = fnd_by_key[key] or (f"Unknown Facility {acctno}" if acctno
                                    else "Unknown Facility (no account)")
+        out.append(["Unknown", name, acctno, "", "", "Inactive", "", "", bbdate_by_key[key]])
+        row_by_key[key] = len(out) - 1
+
+    # --- unique names ------------------------------------------------------------------------
+    # One pass over report rows and placeholders together, so a placeholder is weighed against the
+    # reported facilities and not just against the placeholders written before it.
+    shared = {n for n, c in Counter(_norm(r[1]) for r in out).items() if c > 1}
+    used_norm: set[str] = set()
+    for row in out:
+        name = row[1].strip()
+        if _norm(name) in shared:
+            acctno = row[2].strip()
+            name = f"{name} ({acctno})" if acctno else f"{name} (no account)"
+        # The account number separates facilities across accounts; the ordinal covers what it
+        # cannot - two funds on ONE account whose names normalise the same, and blank accounts.
         if _norm(name) in used_norm:
-            # The account number disambiguates across accounts; the ordinal covers two funds that
-            # share an account and normalise to the same name.
-            base = f"{name} ({acctno})" if acctno else f"{name} (no account)"
-            name, n = base, 1
+            base, n = name, 1
             while _norm(name) in used_norm:
                 n += 1
                 name = f"{base} #{n}"
         used_norm.add(_norm(name))
-        out.append(["Unknown", name, acctno, "", "", "Inactive", "", "", bbdate_by_key[key]])
-        name_by_key[key] = name
+        row[1] = name
 
+    name_by_key = {key: out[idx][1] for key, idx in row_by_key.items()}
     return out, name_by_key
 
 
@@ -1092,12 +1158,24 @@ def main() -> int:
 
     # Retention is an invariant, not a metric: every export row must appear in
     # lp_facility_seeds.csv. A mismatch is a bug in this script, so it fails the run.
-    reported = sum(1 for r in fac_rows if r[5] == "Active")
+    # An Active facility the export carries no LPs for is onboarded empty, so it is called out
+    # separately: it is an expected state (newly originated, or simply not in this export cycle),
+    # not a dropped roster.
+    seeded_names = {r["facility_name"] for r in sr.rows}
+    active = [r for r in fac_rows if r[5] == "Active"]
+    empty_active = [r for r in active if r[1].strip() not in seeded_names]
     print(f"export rows            : {len(export)}")
     print(f"lp_facility_seeds rows : {sr.counts['written']}")
     print(f"lp_master rows         : {len(master_rows)} (one per distinct investor name)")
     print(f"facilities             : {len(fac_rows)} "
-          f"({reported} active from the report, {len(fac_rows) - reported} inactive)")
+          f"({len(active)} active from the report, {len(fac_rows) - len(active)} inactive)")
+    if empty_active:
+        print(f"active, no LP records  : {len(empty_active)} facility(ies) the report states are "
+              "Active that this export carries no LPs for; each is onboarded Active and empty")
+        for r in empty_active[:20]:
+            print(f"  {r[2] or '(no account)':<12}: {r[1]}")
+        if len(empty_active) > 20:
+            print(f"  ... and {len(empty_active) - 20} more")
     print(f"export facilities      : {len(name_by_key)} "
           f"(distinct AccountID+FndName pairs over {len({k[0] for k in name_by_key})} accounts)")
 
@@ -1122,6 +1200,8 @@ def main() -> int:
          "not stated by the Agent Advance Rate Schedule: seeded as fed, set it by hand"),
         ("unmatched UBS classification", sr.counts["unmatched_ubs_classification"],
          "ubs_lp_categories.csv"),
+        ("unmatched investor type", sr.counts["unmatched_investor_type"],
+         "not a stated Investor Type: seeded as fed, investor_type_aliases.csv"),
         ("blank UBS classification", sr.counts["blank_ubs_classification"],
          "fed empty by the export"),
         ("unresolved agent advance rate", sr.counts["unresolved_agent_rate"],

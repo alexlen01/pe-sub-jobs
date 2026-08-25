@@ -1,17 +1,52 @@
-## Investor Type aliases: known raw export spellings/labels -> canonical value in investor_types.csv.
-## Matching is case/punctuation-insensitive, so only list genuinely different wordings here.
-## Anything not resolvable (exact, or via an alias below) is passed through unchanged AND dumped to
-## unmatched_investor_types.csv for analyst cleanup. Add rows here as new variants are confirmed.
+## Investor Type Aliases — maps raw bank Excel spellings to canonical investor_type values.
+## ONLY spelling variants of a type belong here: plurals, abbreviations, and the long forms banks
+## write for the same thing. A row that maps one type onto a DIFFERENT type is not an alias, it is
+## data loss — the LP Master profile is the only place these distinctions survive, so an
+## unrecognised value is passed through and counted rather than folded into a neighbour.
+## Structure flags (SPV, feeder) are not investor types and are carried by their own columns.
 alias,canonical
-Other Institutional Investors,Other Institutional
-Other Institutional Investor,Other Institutional
-FOF & Other Asset Manager,Fund of Funds
+Pension,Pension Fund
+Pension Scheme,Pension Fund
+Retirement Trust,Pension Fund
+Corp Pension,Pension Fund
+Corporate Pension,Pension Fund
+Private Pension,Pension Fund
+Public Pension Fund,Public Pension
+Public Pension Plan,Public Pension
+State Pension,Public Pension
+Endowments,Endowment
+University Endowment,Endowment
+Foundations,Foundation
+Charitable Foundation,Foundation
+Family Offices,Family Office
+Single Family Office,Family Office
+Multi-Family Office,Family Office
+FoF,Fund of Funds
+FOF,Fund of Funds
 Fund-of-Funds,Fund of Funds
 Fund of Fund,Fund of Funds
-FoF,Fund of Funds
+Funds of Funds,Fund of Funds
+Multi-Manager Fund,Fund of Funds
 SWF,Sovereign Wealth Fund
 Sovereign Wealth,Sovereign Wealth Fund
+Sovereign Fund,Sovereign Wealth Fund
+Investment Authority,Sovereign Wealth Fund
 Insurance,Insurance Company
-Endowments,Endowment
-Foundations,Foundation
-Family Offices,Family Office
+Insurer,Insurance Company
+Life Insurance,Insurance Company
+Assurance,Insurance Company
+Health System,Healthcare
+Healthcare System,Healthcare
+Corporate Entity,Corporate
+Corporation,Corporate
+Corporate Treasury,Corporate
+Consultant,Investment Consultant
+Investment Advisor,Investment Consultant
+OCIO,Investment Consultant
+Institutional,Institutional Investor
+Institutional Trust,Institutional Investor
+Hedge Funds,Hedge Fund
+Other Institutional Investor,Other Institutional
+Other Institutional Investors,Other Institutional
+High Net Worth,HNW
+HNWI,HNW

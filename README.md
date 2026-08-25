@@ -40,8 +40,12 @@ funding_ratio, ubs_lp_category, ubs_default_advance_rate, ubs_default_concentrat
 - `high_quality` is **not** a column. The LP DB Export dropped it in the 2026-08-18 format and
   nothing else supplies it, so pe-sub-api keeps its own column on the schema default (`TRUE`)
   rather than being fed a fabricated value.
-- `investor_type`, `region_location` and `funding_ratio` are written **blank** for the same reason.
-  The API reads blank as "not resubmitted" and leaves any value already on the record intact.
+- `funding_ratio` is written **blank** for the same reason. The API reads blank as "not
+  resubmitted" and leaves any value already on the record intact.
+- `investor_type`, `region_location` — fed by the V2 export's `Investor Type` and `Region` columns.
+  Both are optional on the way in, so a workbook written to the older 30-column format still
+  parses and simply states neither, which the API again reads as "not resubmitted". Investor type
+  is normalized against the reference lists; region is carried exactly as the bank wrote it.
 - `aum` / `nav` / `pension_assets` — exactly one is populated per row, chosen by the export's
   `LP Size Criteria` (`AUM` → `aum`, `NAV` → `nav`, `Assets` → `pension_assets`).
 
@@ -75,7 +79,7 @@ Set `INGEST_RUN_ON_STARTUP=false` to skip the startup feeds — useful when `pe-
 
 Concentration limits and UBS advance rates in the fixtures come from `bb_criteria_matrix`, the team's authoritative source. The `agent_*` columns hold the agent bank's own diverging figures — that gap is what the platform measures.
 
-`data/reference/` holds the editable lists the extract normalizes against: the BB criteria matrix, the rate floor map, agent LP categories, UBS LP classifications (`ubs_lp_categories.csv`), and the agent advance rate per category (`agent_rate_map.csv`). The last two arrived with the 2026-08-18 export format — the export now states the UBS classification outright instead of it being derived, and `agent_rate_map.csv` backstops its `Agent Advance Rate` column, supplying the rate from the row's agent category only when that cell is blank. `investor_types.csv` / `investor_type_aliases.csv` are no longer read by the extract (the Investor Type column is gone from the feed); they stay because they mirror `classification_config.INVESTOR_TYPE_OPTS` for the platform.
+`data/reference/` holds the editable lists the extract normalizes against: the BB criteria matrix, the rate floor map, agent LP categories, UBS LP classifications (`ubs_lp_categories.csv`), and the agent advance rate per category (`agent_rate_map.csv`). The last two arrived with the 2026-08-18 export format — the export now states the UBS classification outright instead of it being derived, and `agent_rate_map.csv` backstops its `Agent Advance Rate` column, supplying the rate from the row's agent category only when that cell is blank. `investor_types.csv` / `investor_type_aliases.csv` normalize the V2 `Investor Type` column: the first states the canonical values (mirroring `classification_config.INVESTOR_TYPE_OPTS`, since the LP Master screen builds its Investor Type filter from the distinct values in the table), the second maps the spellings the banks write onto them. Only spelling variants belong in the alias list — a value it does not recognise is written through unchanged and counted in the run summary, never folded into a neighbouring type. `Region` is normalized against nothing and carried as fed.
 
 ## Scripts
 
@@ -88,7 +92,7 @@ Concentration limits and UBS advance rates in the fixtures come from `bb_criteri
 | `parse_excel_templates.py` | Turns one agent BB workbook into a BB template. |
 | `parse_agent_bb_directory.py` | The same, over a directory tree where each subfolder is an agent bank. |
 
-The Agent Bank Summary is a printed report, not a table: the agent bank sits on a group-header row above the facilities it covers, and each group ends with a subtotal line. The extract carries the agent name down onto its rows, drops subtotal and reprinted rows, and disambiguates a borrower name reused under a second account by appending the account number. Two facility columns are not in the report — `ubs_participation` is left blank, and `collateral_date` comes from the export's `BBDate`. `bank_status` is Active when the account appears in the export and Inactive otherwise; export accounts the report omits become `"Unknown"`-bank placeholders, so no LP record is rejected.
+The Agent Bank Summary is a printed report, not a table: the agent bank sits on a group-header row above the facilities it covers, and each group ends with a subtotal line. The extract carries the agent name down onto its rows and drops subtotal and reprinted rows. Facility names are carried as printed and must be unique, because the platform keys facilities by name: when two or more facilities would share one, every one of them is suffixed with its own account number, so a shared name reads as the pair it is rather than one facility keeping the bare name. Two facility columns are not in the report — `ubs_participation` is left blank, and `collateral_date` comes from the export's `BBDate`. `bank_status` is Active when the report states the facility is Active **or** the account appears in the export, and Inactive otherwise — a facility the report calls Active is onboarded Active and empty even when no LPs map to it, since a live facility awaiting its first borrowing base is not a closed one. Export accounts the report omits become `"Unknown"`-bank placeholders, so no LP record is rejected.
 
 ## Getting started
 

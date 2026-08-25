@@ -72,6 +72,10 @@ def generate(chaos: bool, chaos_seed: int | None = None, tag: str = "") -> tuple
     return gen, read_workbook(_SAMPLES[key])
 
 
+def _as_text(v) -> str:
+    return "" if v is None else str(v).strip()
+
+
 def read_workbook(path: Path) -> list[dict]:
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     ws = wb[wb.sheetnames[0]]
@@ -490,6 +494,23 @@ class ChaosRoundTripTest(unittest.TestCase):
                 self.assertAlmostEqual(rate, seed_frac(s["agent_advance_rate"]), delta=RATE_TOL)
                 self.assertAlmostEqual(limit, seed_frac(s["agent_concentration_limit"]),
                                        delta=RATE_TOL)
+
+    def test_every_investor_type_comes_back_as_the_type_it_left_as(self):
+        """The one drifted column with a normalization behind it. Resolving to SOMETHING canonical
+        is not enough - it has to resolve to the same type, or the drift reclassified the LP
+        instead of respelling its label."""
+        got = Counter(s["investor_type"] for s in self.seeds)
+        self.assertEqual([], [t for t in got if t not in self.gen.ITYPE_CANONICAL],
+                         f"did not resolve back to a stated Investor Type: {dict(got)}")
+        self.assertEqual([r["Investor Type"] for r in self.clean],
+                         [s["investor_type"] for s in self.seeds])
+
+    def test_region_survives_the_drift_exactly_as_the_bank_wrote_it(self):
+        """Region is normalized against nothing, so what the workbook says is what LP Master gets -
+        drift included. Asserting it against the DIRTY rows rather than the clean ones is the
+        point: a value quietly rewritten on the way through would be the bug."""
+        self.assertEqual([_as_text(r["Region"]) for r in self.dirty],
+                         [s["region_location"] for s in self.seeds])
 
     def test_name_drift_does_not_split_an_lp_into_several_profiles(self):
         """lp_master is one row per LP. A name that drifted row to row would fan one LP out into

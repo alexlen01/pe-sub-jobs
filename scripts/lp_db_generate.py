@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 r"""
-Generate a reproducible sample of the 2026-08-18, 30-column LP DB Export format for
+Generate a reproducible sample of the V2, 32-column LP DB Export format for
 lp_db_extract.py. The workbook contains facility/investor positions with canonical reference
 values, reconciled borrowing-base fields, and optional recoverable data-quality variations.
 
@@ -72,13 +72,14 @@ ORPHAN_ACCOUNTS = [             # AccountIDs the report omits -> exercise the "U
     ("5VZ9002", "TPG AG Asset Based Credit Fund"),
 ]
 
-# The 30 headers of the 2026-08-18 LP DB Export, in order, EXACTLY as the real file spells them —
+# The 32 headers of the V2 LP DB Export, in order, EXACTLY as the real file spells them —
 # quirks included, because reproducing them is most of the point of this generator: "LP Size" and
 # "($ Bil)" are separated by a CRLF inside the one cell, "Insitutional" is misspelt at source, and
 # "Moody'S" carries a capital S. lp_db_extract matches headers through _norm(), which absorbs all
 # three, so this stays a faithful sample rather than a cleaned-up one.
 SRC_HEADERS = [
-    "AccountID", "FndName", "Investor Name", "Parent", "SPV", "UBS LP Classification",
+    "AccountID", "FndName", "Investor Name", "Parent", "Region", "SPV",
+    "UBS LP Classification", "Investor Type",
     "Insitutional vs HNW", "Investment Grade?", "Agent LP Classification", "S&P", "Moody'S",
     "Fitch", "LP Size\r\n($ Bil)", "LP Size Criteria", "Capital Commitments", "Uncalled Capital",
     "UBS Advance Rate", "Agent Advance Rate", "Agent Concentration Limit",
@@ -96,10 +97,12 @@ ABS_COLS = [
 ]
 ABS_TOTAL_MARKER = "accesstotalsloanamount"   # _norm() prefix of the subtotal / grand-total rows
 
-# Internal keys for the same 30 columns, in the same order. Mirrors lp_db_extract.SRC_COLS so the
+# Internal keys for the same columns, in the same order. Mirrors lp_db_extract.SRC_COLS so the
 # chaos monkey can address a column by name and the two scripts stay legible side by side.
+# Region and Investor Type are V2's two additions, written where V2 puts them.
 SRC_COLS = [
-    "AccountID", "FndName", "InvestorName", "Parent", "SPV", "UbsClassification",
+    "AccountID", "FndName", "InvestorName", "Parent", "Region", "SPV",
+    "UbsClassification", "InvestorType",
     "InstitutionalHNW", "InvestmentGrade", "Classification", "SP", "Moodys", "Fitch",
     "LpSizeBil", "LpSizeCriteria", "Commitments", "Uncalled", "UBSAR", "AgentAR",
     "AgentCL", "UBSCL",
@@ -119,13 +122,31 @@ TYPE_SPECS = {
     "Sovereign Wealth Fund": (["Investment Authority", "Sovereign Fund", "Future Fund"], "aum"),
     "Fund of Funds":         (["Fund of Funds", "Multi-Manager Fund", "Partners Fund"], "nav"),
     "Hedge Fund":            (["Master Fund", "Absolute Return Fund", "Opportunities Fund"], "nav"),
-    "Endowment ":            (["Endowment"], "aum"),
     "Corporate":             (["Treasury", "Corporate Holdings", "Group Treasury"], "aum"),
     "Healthcare":            (["Health System", "Hospital Trust", "Healthcare Endowment"], "aum"),
     "Investment Consultant": (["Investment Advisors", "Capital Advisors", "Consulting Group"], "aum"),
     "Institutional Investor":(["Institutional Trust", "Alternative Assets Trust", "Capital Partners"], "aum"),
     "Other Institutional":   (["Strategic Capital Partners", "Alternative Assets", "Global Investors"], "aum"),
 }
+# Region, from the platform's REGION_OPTS. Free text downstream - the extract carries this column
+# as fed rather than normalizing it - so the generator states the platform's own spellings and lets
+# the chaos monkey supply the drift, rather than inventing a second vocabulary here.
+REGION_WEIGHTS = {
+    "North America": 46, "Europe": 24, "Asia-Pacific": 16, "Middle East": 9, "Other": 5,
+}
+# Where a type actually raises from, so the sample does not read as region sprinkled at random over
+# investor type. Only the types with a real skew are listed; everything else takes REGION_WEIGHTS.
+REGION_BY_TYPE = {
+    "Sovereign Wealth Fund": {"Middle East": 45, "Asia-Pacific": 30, "Europe": 12,
+                              "North America": 5, "Other": 8},
+    "Public Pension":        {"North America": 62, "Europe": 22, "Asia-Pacific": 11,
+                              "Middle East": 2, "Other": 3},
+    "Endowment":             {"North America": 82, "Europe": 10, "Asia-Pacific": 5,
+                              "Middle East": 1, "Other": 2},
+    "Healthcare":            {"North America": 80, "Europe": 12, "Asia-Pacific": 5,
+                              "Middle East": 1, "Other": 2},
+}
+
 TYPE_WEIGHTS = {  # rough real-world mix
     "Public Pension": 16, "Pension Fund": 14, "Insurance Company": 12, "Endowment": 9,
     "Foundation": 8, "Sovereign Wealth Fund": 6, "Family Office": 8, "Fund of Funds": 7,
@@ -252,6 +273,8 @@ CHAOS_RATES = {
     "ratings": 0.15,           # 'A-' -> 'A minus', 'Baa 1', case noise (all three agencies)
     "lp_size": 0.15,           # LP Size -> range/threshold/unit strings ('5 - 8', '>10', '2 bn')
     "lp_size_criteria": 0.08,  # size basis left blank (the label itself never drifts)
+    "investor_type": 0.18,     # 'Pension Fund' -> 'Corp Pension' etc. - decided once per LP
+    "region": 0.14,            # 'North America' -> 'USA' / 'N. America' - decided once per LP
     "agentar_null": 0.04,      # Agent Advance Rate left blank      -> agent_rate_map.csv rate_pct
     "agentcl_null": 0.04,      # Agent Concentration Limit blank    -> agent_rate_map.csv conc_limit_pct
 }
@@ -292,6 +315,19 @@ CHAOS_SACRED = ("AccountID", "FndName", "Commitments", "Called", "Uncalled", "BB
 #                      most recent submission that RESOLVES, so an LP keeps its size as long as one
 #                      of its rows still states the basis. apply_chaos guarantees one always does.
 CHAOS_BLANKABLE = ("AgentAR", "AgentCL", "LpSizeCriteria")
+
+# Region drift. Unlike Investor Type below, region is carried as fed - the extract normalizes it
+# against nothing - so these spellings reach LP Master exactly as written. That is the point: region
+# is a label the banks write freely, and a sample that only ever spelt it the platform's way would
+# not show what the column actually looks like. Drift is decided once per LP, so an LP's own profile
+# still reads as one region told one way and not as three.
+REGION_DRIFT = {
+    "North America": ["USA", "US", "N. America", "United States", "North America (US)"],
+    "Europe":        ["EMEA", "Western Europe", "EU", "UK/Europe"],
+    "Asia-Pacific":  ["APAC", "Asia Pacific", "Asia", "Asia/Pac"],
+    "Middle East":   ["MENA", "Middle East & Africa", "GCC"],
+    "Other":         ["Global", "Other / Global", "LatAm"],
+}
 
 _NAME_SUFFIX_RE = re.compile(r",?\s+(LLC|L\.L\.C\.|L\.P\.|LP|Ltd\.?|Inc\.?|Limited)$", re.I)
 
@@ -368,6 +404,19 @@ RATING_BANDS, SUB_IG_NOTCHES = load_rating_scales()
 # stops. It is the same list lp_db_extract normalizes the column against, which is what keeps the
 # advance rate, concentration limit and borrowing base in a row aligned to the class beside them.
 UBS_CANONICAL = _alias_lookup("ubs_lp_categories.csv")
+# norm(canonical or alias) -> canonical Investor Type. Used BOTH ways here, unlike the UBS list
+# above: to prove the types the generator draws are canonical, and to source the alias spellings the
+# chaos monkey drifts them to - so a drifted cell is always one the extract resolves back to the
+# type the row was built as.
+ITYPE_CANONICAL = [r[0] for r in _reference_rows("investor_types.csv")[1:] if r[0]]
+ITYPE_LOOKUP = {_norm(c): c for c in ITYPE_CANONICAL}
+ITYPE_ALIASES: dict[str, list[str]] = {}
+for _alias, _canon in _alias_lookup("investor_type_aliases.csv").items():
+    if _alias not in ITYPE_LOOKUP:
+        ITYPE_LOOKUP[_alias] = _canon
+for _row in _reference_rows("investor_type_aliases.csv")[1:]:
+    if len(_row) >= 2 and _row[1] and _norm(_row[0]) not in {_norm(c) for c in ITYPE_CANONICAL}:
+        ITYPE_ALIASES.setdefault(_row[1], []).append(_row[0])
 # The sub-investment-grade notches a fund LP realistically carries. The scales run down to D, but an
 # LP the bank has admitted at all is not a defaulted issuer; drawing from the whole tail would put
 # CCC- and D ratings on live positions.
@@ -457,7 +506,10 @@ def validate_chaos_vocabularies() -> None:
         printed beside it;
       * every Agent LP Category the generator emits is one the Agent Advance Rate Schedule states,
         carrying the rate and limit it would fall back to, so blanking either cell cannot change
-        the row."""
+        the row;
+      * every Investor Type the generator draws is canonical, and every alias the chaos monkey can
+        drift one to resolves back to it - so a drifted cell costs the sample its spelling and
+        never its type."""
     problems: list[str] = []
 
     for cls in UBS_CLASSES:
@@ -488,6 +540,23 @@ def validate_chaos_vocabularies() -> None:
             problems.append(f"agent_rate_map.csv {cat!r} = {fallback}, generator uses "
                             f"{rate * 100:g}/{limit * 100:g} - a blanked cell would not be recovered "
                             f"as the value the borrowing base was computed with")
+
+    # Investor Type is normalized by the extract, so the drift the chaos monkey applies has to be
+    # reversible. Checked in both directions: a type drawn here that the canonical list does not
+    # state would reach LP Master as its own dropdown entry, and an alias that resolves to anything
+    # other than the type it replaced would silently reclassify the LP.
+    for itype in TYPE_WEIGHTS:
+        if ITYPE_LOOKUP.get(_norm(itype)) != itype:
+            problems.append(f"Investor Type {itype!r} is not a canonical value stated by "
+                            f"investor_types.csv (resolves to {ITYPE_LOOKUP.get(_norm(itype))!r})")
+        for alias in ITYPE_ALIASES.get(itype, []):
+            if ITYPE_LOOKUP.get(_norm(alias)) != itype:
+                problems.append(f"Investor Type alias {alias!r} resolves to "
+                                f"{ITYPE_LOOKUP.get(_norm(alias))!r}, not {itype!r} - drifting a "
+                                "row to it would change the LP's type, not its spelling")
+    for region in REGION_WEIGHTS:
+        if region not in REGION_DRIFT:
+            problems.append(f"Region {region!r} has no REGION_DRIFT spellings")
 
     for agency in AGENCIES:
         missing = [b for b in BAND_ORDER if not RATING_BANDS.get(agency, {}).get(b)]
@@ -605,6 +674,13 @@ def apply_chaos(export_rows: list[dict], rng: random.Random) -> list[tuple]:
     # deletes the canonical name from the export and leaves each child a dangling pointer that
     # pe-sub-api links to nothing. Sponsors keep their spelling; feeders still drift.
     sponsors = {_as_str(row["Parent"]) for row in export_rows if not _blank(row["Parent"])}
+    # Investor Type and Region are attributes of the LP, not of the submission, so they are decided
+    # once per LP for the same reason the name is: an LP whose type read "Pension Fund" on one row
+    # and "Corp Pension" on the next would not look like one analyst's spelling, it would look like
+    # the LP changed - and build_master consolidates from the most recent row, so which spelling
+    # survived would be an accident of BBDate ordering.
+    itype_variant: dict[str, tuple[str, str]] = {}
+    region_variant: dict[str, tuple[str, str]] = {}
     for row in export_rows:
         original = _as_str(row["InvestorName"])
         if not original:
@@ -614,6 +690,15 @@ def apply_chaos(export_rows: list[dict], rng: random.Random) -> list[tuple]:
             decided.add(original)
             if original not in sponsors and rng.random() < CHAOS_RATES["investor_name"]:
                 name_variant[original] = _chaos_name(original, rng)
+            # Only spellings the alias list resolves BACK to the type the row was built as. The
+            # investor type is the one drifted cell with a normalization behind it, so a drift the
+            # extract could not resolve would not be dirty data, it would be a different type.
+            aliases = ITYPE_ALIASES.get(_as_str(row["InvestorType"]), [])
+            if aliases and rng.random() < CHAOS_RATES["investor_type"]:
+                itype_variant[original] = ("itype alias", rng.choice(aliases))
+            drifts = REGION_DRIFT.get(_as_str(row["Region"]), [])
+            if drifts and rng.random() < CHAOS_RATES["region"]:
+                region_variant[original] = ("region alias", rng.choice(drifts))
 
     # An LP whose every row lost its LP Size Criteria would lose its LP Size outright, because
     # build_master can only fall through to another row that still states a basis. Cap the blanking
@@ -629,6 +714,10 @@ def apply_chaos(export_rows: list[dict], rng: random.Random) -> list[tuple]:
         agent_cells_are_overrides = tranche_of(row["FndName"]) == "Uncommitted"
         if investor in name_variant:
             mutate(row_no, row, "InvestorName", name_variant[investor])
+        if investor in itype_variant:
+            mutate(row_no, row, "InvestorType", itype_variant[investor])
+        if investor in region_variant:
+            mutate(row_no, row, "Region", region_variant[investor])
         if rng.random() < CHAOS_RATES["ratings"]:
             for col in ("SP", "Moodys", "Fitch"):
                 if not _blank(row[col]):
@@ -870,6 +959,11 @@ def build_investor(idx: int, used_names: set, sponsor_pool: list) -> dict:
         if name not in used_names:
             used_names.add(name)
             break
+    # Region follows the type where the type implies one (a sovereign fund is not raised in Ohio),
+    # and the general mix otherwise. It is an attribute of the LP, so every row this investor holds
+    # carries the same value.
+    region_weights = REGION_BY_TYPE.get(itype, REGION_WEIGHTS)
+    region = pick_weighted(list(region_weights), list(region_weights.values()))
     agent_cat = pick_weighted([c for c, *_ in AGENT_CATEGORIES],
                               [w for *_, w in AGENT_CATEGORIES])
     spv = random.random() < 0.12
@@ -917,6 +1011,7 @@ def build_investor(idx: int, used_names: set, sponsor_pool: list) -> dict:
         "parent": parent,
         "spv": "Y" if spv else "N",
         "itype": itype,
+        "region": region,
         "inst": "HNW" if hnw else "Institutional",
         "ig": "Yes" if ig else "No",
         "cls": agent_cat,
@@ -1198,7 +1293,8 @@ def main() -> int:
 
     # Export rows in SRC_COLS order, as dicts so the chaos monkey can address columns by name.
     export_rows = [dict(zip(SRC_COLS, [
-        r["acct"], r["fund"], r["name"], r["parent"], r["spv"], r["ubs_cls"],
+        r["acct"], r["fund"], r["name"], r["parent"], r["region"], r["spv"],
+        r["ubs_cls"], r["itype"],
         r["inst"], r["ig"], r["cls"], r["sp_rating"], r["moodys_rating"], r["fitch_rating"],
         r["lp_size_bil"], r["lp_size_criteria"], r["commit"], r["uncalled_capital"], r["ubsar"],
         r["agent_ar"], r["agent_cl"], r["ubs_cl"], r["pct_commit"], r["called"], r["pct_of_fund_uncalled"],

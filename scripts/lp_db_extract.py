@@ -315,12 +315,14 @@ def _norm(s) -> str:
 
 
 def clean_name(value) -> str:
-    """Trim and normalize a person or organization name for stored LP records."""
+    """Trim a person or organization name for stored LP records.
+
+    Casing is carried exactly as fed: the source spelling of a name is the authoritative one, and
+    re-casing it turns acronyms and internal capitals into something the fed name never said."""
     name = as_is(value)
     if not name:
         return ""
-    name = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", name)
-    return re.sub(r"\s+", " ", name).title()
+    return re.sub(r"\s+", " ", name)
 
 
 @dataclass

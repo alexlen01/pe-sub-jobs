@@ -76,6 +76,21 @@ METADATA_ROW_KEYWORDS = {
     "blue text", "green ", "yellow ", "underlined", "bold", "italic", "font", "style",
     "means", "indicate", "shows", "mean", "marked", "marked as",
 }
+# Matched on word boundaries, never as bare substrings. Several of the keywords above are short
+# English fragments that occur inside ordinary fund and investor names — "key" sits inside
+# "Keystone Partners Fund", "mean" inside "Meanwood", "source" inside "Resourced" — and a bare
+# substring test silently reclassifies every data row carrying such a name as legend chrome, which
+# empties the grid and drops the whole sheet.
+METADATA_KEYWORD_RE = re.compile(
+    r"\b(?:%s)\b" % "|".join(sorted((re.escape(kw.strip()) for kw in METADATA_ROW_KEYWORDS),
+                                    key=len, reverse=True))
+)
+
+
+def _metadata_keyword(row_text: str) -> Optional[str]:
+    """The legend/notes keyword this already-lowercased row states, or None."""
+    match = METADATA_KEYWORD_RE.search(row_text)
+    return match.group(0) if match else None
 # Minimum percentage of matched columns that must contain data for a row to be considered "investor data"
 MIN_INVESTOR_DATA_THRESHOLD = 0.60  # 60% of matched columns must have data
 
@@ -406,19 +421,20 @@ class ExcelAnalyzer:
             if not row_cells:
                 continue
 
-            # Skip rows flagged as metadata
             populated = self._non_blank(row_cells)
             if not populated:
-                continue
-
-            row_text = " ".join(populated).lower()
-            is_metadata = any(kw in row_text for kw in METADATA_ROW_KEYWORDS)
-            if is_metadata:
                 continue
 
             # Count data in matched columns only
             data_col_count = sum(1 for j in range(min(matched_col_count, len(row_cells)))
                                if row_cells[j] and str(row_cells[j]).strip())
+
+            # Skip rows flagged as metadata. Density is settled first and outranks the keyword: a
+            # row carrying data across most of the matched columns is investor data whatever words
+            # appear in it, and legend/footer chrome is sparse by nature.
+            row_text = " ".join(populated).lower()
+            if data_col_count < min_data_cols and _metadata_keyword(row_text):
+                continue
 
             if data_col_count >= min_data_cols:
                 valid_data_rows += 1
@@ -556,30 +572,28 @@ class ExcelAnalyzer:
                 continue
 
             row_text = " ".join(populated).lower()
-            is_metadata_row = False
-            matched_keyword = None
 
-            # Heuristic 1 (HIGH PRIORITY): Check if any cell contains metadata keywords
-            # This catches Legend, Notes, Footer, Shading, etc.
-            for kw in METADATA_ROW_KEYWORDS:
-                if kw in row_text:
-                    is_metadata_row = True
-                    matched_keyword = kw
-                    break
-
-            # Heuristic 2 (MODERATE PRIORITY): Check data density across matched columns
+            # Heuristic 1 (HIGH PRIORITY): Check data density across matched columns
             # Single-cell rows are typically group headers or banners, so don't apply sparse check
             # Only apply to rows with multiple populated cells (which should have more investor data)
             is_sparse = False
-            if not is_metadata_row and len(populated) > 1:
+            is_dense = False
+            if len(populated) > 1:
                 data_col_count = 0
                 for j in range(min(matched_col_count, len(row_cells))):
                     cell = row_cells[j]
                     if cell and str(cell).strip():
                         data_col_count += 1
                 # Flag as sparse if low data density across matched columns
-                if data_col_count < min_data_cols:
-                    is_sparse = True
+                is_dense = data_col_count >= min_data_cols
+                is_sparse = not is_dense
+
+            # Heuristic 2: Check whether the row states a metadata keyword
+            # This catches Legend, Notes, Footer, Shading, etc. Density is settled first and
+            # outranks it: a row carrying data across most of the matched columns is investor data
+            # whatever words appear in it, and legend/footer chrome is sparse by nature.
+            matched_keyword = None if is_dense else _metadata_keyword(row_text)
+            is_metadata_row = matched_keyword is not None
 
             # Heuristic 3: Check if row is all the same value repeated (formatting artifact)
             is_repetitive = False

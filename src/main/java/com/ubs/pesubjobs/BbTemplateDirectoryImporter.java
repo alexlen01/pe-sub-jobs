@@ -1,8 +1,10 @@
 package com.ubs.pesubjobs;
 
 import com.ubs.pesubjobs.config.BbTemplateImportProperties;
+import com.ubs.pesubjobs.security.JobsSecurityProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.io.FileSystemResource;
@@ -19,6 +21,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.Comparator;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -34,9 +37,27 @@ public class BbTemplateDirectoryImporter implements ApplicationRunner {
     private final Map<Path, Fingerprint> imported = new ConcurrentHashMap<>();
     private final AtomicBoolean scanRunning = new AtomicBoolean(false);
 
-    public BbTemplateDirectoryImporter(BbTemplateImportProperties props) {
+    // Two constructors, so the injection point has to be named explicitly.
+    @Autowired
+    public BbTemplateDirectoryImporter(BbTemplateImportProperties props, JobsSecurityProperties security) {
+        this(props, security, RestClient.builder());
+    }
+
+    /**
+     * Takes the builder rather than making one, so the scan's decisions — which files it posts, and
+     * what it does when the API refuses one — can be exercised against a stubbed transport instead
+     * of only against a live API. Not the injection point: the constructor above is.
+     */
+    BbTemplateDirectoryImporter(BbTemplateImportProperties props, JobsSecurityProperties security,
+                                RestClient.Builder restClientBuilder) {
         this.props = props;
-        this.restClient = RestClient.builder().baseUrl(trimTrailingSlash(props.apiBaseUrl())).build();
+        // Template import is SERVICE-gated on pe-sub-api alongside the ANALYST screen path, so
+        // this caller asserts only what it is. In gateway mode a header-less post is 401.
+        this.restClient = restClientBuilder
+                .baseUrl(trimTrailingSlash(props.apiBaseUrl()))
+                .defaultHeader(security.getUserHeader(), security.getServiceUser())
+                .defaultHeader(security.getRolesHeader(), security.getRequiredRole())
+                .build();
     }
 
     @Override
@@ -124,8 +145,13 @@ public class BbTemplateDirectoryImporter implements ApplicationRunner {
         }
     }
 
+    /**
+     * Case folds against ROOT, not the JVM default: a Turkish default locale folds the "I" in
+     * ".PARTIAL.XLSX" to a dotless "ı", the guard below stops matching, and a workbook still
+     * being written gets posted to the API half-formed.
+     */
     private boolean isImportWorkbook(Path path) {
-        String name = path.getFileName().toString().toLowerCase();
+        String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
         return name.endsWith(".xlsx")
             && !name.startsWith("~$")
             && !name.endsWith(".tmp.xlsx")

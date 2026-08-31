@@ -2,6 +2,7 @@ package com.ubs.pesubjobs;
 
 import com.ubs.pesubjobs.client.PeSubApiClient;
 import com.ubs.pesubjobs.config.IngestProperties;
+import com.ubs.pesubjobs.config.IngestTallyListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.batch.core.job.Job;
@@ -9,6 +10,7 @@ import org.springframework.batch.core.job.JobExecution;
 import org.springframework.batch.core.job.parameters.JobParameters;
 import org.springframework.batch.core.job.parameters.JobParametersBuilder;
 import org.springframework.batch.core.launch.JobOperator;
+import org.springframework.batch.infrastructure.item.ExecutionContext;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
@@ -16,6 +18,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.OptionalLong;
 
 @Component
 public class JobStartupRunner implements ApplicationRunner {
@@ -58,7 +61,14 @@ public class JobStartupRunner implements ApplicationRunner {
             return;
         }
 
-        if (dataAlreadyPopulated()) {
+        PopulationState state = populationState();
+        if (state == PopulationState.UNKNOWN) {
+            // The feeds below replace LP Master wholesale. Running them on an unanswered question
+            // risks emptying a populated platform, so an uncertain check is a stop, not a go.
+            log.warn("Startup ingest skipped because the platform's populated state could not be established. Fix the API and restart, or run /jobs once the counts are readable.");
+            return;
+        }
+        if (state == PopulationState.POPULATED) {
             log.info("Database already populated with seed data - skipping startup ingest");
             return;
         }
@@ -99,17 +109,37 @@ public class JobStartupRunner implements ApplicationRunner {
         }
     }
 
-    private boolean dataAlreadyPopulated() {
-        long facilityCount = apiClient.getFacilityCount();
-        long lpMasterCount = apiClient.getLpMasterCount();
-        long lpRecordCount = apiClient.getLpRecordCount();
+    /** What the row counts say about the platform — including that they say nothing. */
+    private enum PopulationState { EMPTY, POPULATED, UNKNOWN }
 
-        boolean hasData = facilityCount > 0 || lpMasterCount > 0 || lpRecordCount > 0;
+    /**
+     * Answers only from counts the API actually returned. One unreadable count makes the whole
+     * answer UNKNOWN: "no rows" and "could not ask" lead to opposite actions, and the destructive
+     * one must never be reached by default.
+     */
+    private PopulationState populationState() {
+        OptionalLong facilityCount = apiClient.getFacilityCount();
+        OptionalLong lpMasterCount = apiClient.getLpMasterCount();
+        OptionalLong lpRecordCount = apiClient.getLpRecordCount();
+
+        if (facilityCount.isEmpty() || lpMasterCount.isEmpty() || lpRecordCount.isEmpty()) {
+            log.warn("Data existence check inconclusive: facilities={} lpMaster={} lpRecords={}",
+                    describe(facilityCount), describe(lpMasterCount), describe(lpRecordCount));
+            return PopulationState.UNKNOWN;
+        }
+
+        boolean hasData = facilityCount.getAsLong() > 0
+                || lpMasterCount.getAsLong() > 0
+                || lpRecordCount.getAsLong() > 0;
         if (hasData) {
             log.info("Data existence check: facilities={} lpMaster={} lpRecords={}",
-                    facilityCount, lpMasterCount, lpRecordCount);
+                    facilityCount.getAsLong(), lpMasterCount.getAsLong(), lpRecordCount.getAsLong());
         }
-        return hasData;
+        return hasData ? PopulationState.POPULATED : PopulationState.EMPTY;
+    }
+
+    private String describe(OptionalLong count) {
+        return count.isPresent() ? Long.toString(count.getAsLong()) : "unknown";
     }
 
     private void runJob(String name, Job job, String filePath) {
@@ -124,10 +154,17 @@ public class JobStartupRunner implements ApplicationRunner {
 
             long reads = execution.getStepExecutions().stream().mapToLong(step -> step != null ? step.getReadCount() : 0).sum();
             long writes = execution.getStepExecutions().stream().mapToLong(step -> step != null ? step.getWriteCount() : 0).sum();
-            long skips = execution.getStepExecutions().stream().mapToLong(step -> step != null ? step.getSkipCount() : 0).sum();
 
-            log.info("[{}] finished - status={} reads={} writes={} skips={}",
-                    name, execution.getStatus(), reads, writes, skips);
+            ExecutionContext ctx = execution.getExecutionContext();
+            long created = ctx.containsKey(IngestTallyListener.CREATED_KEY)
+                    ? ctx.getLong(IngestTallyListener.CREATED_KEY) : 0;
+            long updated = ctx.containsKey(IngestTallyListener.UPDATED_KEY)
+                    ? ctx.getLong(IngestTallyListener.UPDATED_KEY) : 0;
+            long notLanded = ctx.containsKey(IngestTallyListener.NOT_LANDED_KEY)
+                    ? ctx.getLong(IngestTallyListener.NOT_LANDED_KEY) : 0;
+
+            log.info("[{}] finished - status={} reads={} writes={} created={} updated={} rowsNotLanded={}",
+                    name, execution.getStatus(), reads, writes, created, updated, notLanded);
         } catch (Exception e) {
             log.error("[{}] failed - filePath={} error={}", name, filePath, e.getMessage(), e);
         }

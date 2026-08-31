@@ -29,6 +29,11 @@ ingest:
   # Optional: classification concentration-limit defaults feed (classification,limit_pct).
   # Blank → skipped at startup; trigger on demand via POST /jobs/cls-conc-limits-ingest.
   cls-conc-limits-file: ${CLS_CONC_LIMITS_FILE:}
+  # The only directory an on-demand /jobs trigger may read a caller-named file from.
+  import-root: ${INGEST_IMPORT_ROOT:data/out}
+  # How many of a feed's rows may fail to land before the run is reported FAILED — rows
+  # pe-sub-api refused plus rows dropped before being sent.
+  max-rows-not-landed: ${INGEST_MAX_ROWS_NOT_LANDED:10}
   # pe-sub-api base URL — every feed posts to its bulk ingest/seed endpoints.
   api-base-url: ${PE_SUB_API_URL}
   # How long to wait for pe-sub-api to answer /api/ping before skipping the startup feeds.

@@ -12,5 +12,6 @@ public record ProcessedFacility(
         String bankStatus,
         LocalDate bankStatusDate,
         BigDecimal ubsParticipation,
-        LocalDate collateralDate
+        LocalDate collateralDate,
+        String umbrellaName
 ) {}

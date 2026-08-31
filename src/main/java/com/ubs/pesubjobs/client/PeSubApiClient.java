@@ -4,6 +4,7 @@ import com.ubs.pesubjobs.config.IngestProperties;
 import com.ubs.pesubjobs.model.LpFacilitySeedRow;
 import com.ubs.pesubjobs.model.ProcessedFacility;
 import com.ubs.pesubjobs.model.ProcessedLpMaster;
+import com.ubs.pesubjobs.security.JobsSecurityProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.ParameterizedTypeReference;
@@ -13,6 +14,7 @@ import org.springframework.web.client.RestClient;
 
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
 
 /**
  * All pe-sub-jobs writes go through pe-sub-api's SERVICE-gated bulk endpoints — this app holds
@@ -30,9 +32,14 @@ public class PeSubApiClient {
 
     private final RestClient rest;
 
-    public PeSubApiClient(IngestProperties props) {
+    public PeSubApiClient(IngestProperties props, JobsSecurityProperties security) {
         this.rest = RestClient.builder()
                 .baseUrl(props.apiBaseUrl().replaceAll("/+$", ""))
+                // The ingest, seed and clear routes are SERVICE-gated on pe-sub-api. In gateway
+                // mode a header-less feed is rejected 401, so this service asserts its own
+                // identity on every call — which is also what pe-sub-api's audit trail attributes.
+                .defaultHeader(security.getUserHeader(), security.getServiceUser())
+                .defaultHeader(security.getRolesHeader(), security.getRequiredRole())
                 .build();
     }
 
@@ -87,42 +94,42 @@ public class PeSubApiClient {
         }
     }
 
-    public long getFacilityCount() {
-        try {
-            Map<String, Long> response = rest.get()
-                    .uri("/api/facilities/count")
-                    .retrieve()
-                    .body(new ParameterizedTypeReference<Map<String, Long>>() {});
-            return response != null ? response.getOrDefault("count", 0L) : 0L;
-        } catch (Exception e) {
-            log.debug("Failed to query facility count: {}", e.getMessage());
-            return 0L;
-        }
+    public OptionalLong getFacilityCount() {
+        return count("/api/facilities/count");
     }
 
-    public long getLpMasterCount() {
-        try {
-            Map<String, Long> response = rest.get()
-                    .uri("/api/lp-master/count")
-                    .retrieve()
-                    .body(new ParameterizedTypeReference<Map<String, Long>>() {});
-            return response != null ? response.getOrDefault("count", 0L) : 0L;
-        } catch (Exception e) {
-            log.debug("Failed to query LP Master count: {}", e.getMessage());
-            return 0L;
-        }
+    public OptionalLong getLpMasterCount() {
+        return count("/api/lp-master/count");
     }
 
-    public long getLpRecordCount() {
+    public OptionalLong getLpRecordCount() {
+        return count("/api/lpRecords/count");
+    }
+
+    /**
+     * A row count from the API, or empty when it could not be established.
+     *
+     * <p>The distinction is the point: these counts decide whether startup treats the platform as
+     * unseeded, and a reload that follows that decision replaces LP Master wholesale. Answering a
+     * failed query with {@code 0} makes an API outage indistinguishable from an empty database and
+     * hands the caller a destructive decision on evidence it does not have. Empty says so instead,
+     * and the failure is logged at WARN because it is an operational event, not a detail.
+     */
+    private OptionalLong count(String uri) {
         try {
             Map<String, Long> response = rest.get()
-                    .uri("/api/lpRecords/count")
+                    .uri(uri)
                     .retrieve()
                     .body(new ParameterizedTypeReference<Map<String, Long>>() {});
-            return response != null ? response.getOrDefault("count", 0L) : 0L;
+            Long value = response != null ? response.get("count") : null;
+            if (value == null) {
+                log.warn("GET {} returned no count - treating the row count as unknown", uri);
+                return OptionalLong.empty();
+            }
+            return OptionalLong.of(value);
         } catch (Exception e) {
-            log.debug("Failed to query LP Record count: {}", e.getMessage());
-            return 0L;
+            log.warn("GET {} failed: {} - treating the row count as unknown", uri, e.getMessage());
+            return OptionalLong.empty();
         }
     }
 

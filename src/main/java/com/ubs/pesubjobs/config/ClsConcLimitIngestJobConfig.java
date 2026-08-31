@@ -47,7 +47,8 @@ public class ClsConcLimitIngestJobConfig {
                                        PlatformTransactionManager txManager,
                                        @Qualifier("clsConcLimitReader") FlatFileItemReader<ClsConcLimitRow> clsConcLimitReader,
                                        ClsConcLimitRowProcessor clsConcLimitProcessor,
-                                       @Qualifier("clsConcLimitWriter") ItemWriter<ProcessedClsConcLimit> clsConcLimitWriter) {
+                                       @Qualifier("clsConcLimitWriter") ItemWriter<ProcessedClsConcLimit> clsConcLimitWriter,
+                                       IngestTallyListener tallyListener) {
         return new StepBuilder("clsConcLimitIngestStep", jobRepository)
                 .<ClsConcLimitRow, ProcessedClsConcLimit>chunk(50)
                 .transactionManager(txManager)
@@ -55,7 +56,9 @@ public class ClsConcLimitIngestJobConfig {
                 .processor(clsConcLimitProcessor)
                 .writer(clsConcLimitWriter)
                 // No skip policy: a row that cannot be written fails the job rather than
-                // vanishing from the load.
+                // vanishing from the load. The merge endpoint returns no per-row summary, so the
+                // listener here counts only rows dropped before they were sent.
+                .listener(tallyListener)
                 .build();
     }
 

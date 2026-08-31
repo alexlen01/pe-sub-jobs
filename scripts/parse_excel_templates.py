@@ -9,6 +9,9 @@ investor-data validation to skip Legend, Notes, and metadata rows.
 USAGE
     python parse_excel_templates.py <workbook.xlsx>
 
+Reads .xlsx only. A legacy .xls workbook is refused with a message saying so — re-save it
+as .xlsx first.
+
 Example:
     python parse_excel_templates.py agent-bb-2026.xlsx
 
@@ -31,6 +34,24 @@ try:
     from openpyxl.utils import get_column_letter
 except ImportError:  # pragma: no cover
     sys.exit("openpyxl is required: pip install openpyxl")
+
+# ── Supported input formats ──
+# openpyxl reads the OOXML container and nothing else. A legacy .xls is a different file format
+# altogether, so accepting one only moves the failure into the middle of the parse, where it
+# surfaces as an XML error that names neither the real problem nor the remedy.
+SUPPORTED_WORKBOOK_SUFFIXES = (".xlsx",)
+
+
+def unsupported_workbook_reason(path: Path) -> Optional[str]:
+    """Why this file cannot be parsed, or None when it can be."""
+    suffix = path.suffix.lower()
+    if suffix in SUPPORTED_WORKBOOK_SUFFIXES:
+        return None
+    if suffix == ".xls":
+        return ("legacy .xls format - this parser reads .xlsx only; "
+                "re-save the workbook as .xlsx and run it again")
+    return f"unsupported file type '{path.suffix or '(none)'}' - this parser reads .xlsx only"
+
 
 # ── Analysis heuristic constants ──
 MIN_HEADER_MATCHES_DEFAULT = 3     # Minimum columns matching field dictionary to recognize a header row
@@ -917,7 +938,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         prog="parse_excel_templates.py",
         description="Analyze an Excel workbook and generate a template metadata file.",
     )
-    p.add_argument("input", help="Path to the Excel workbook to analyze (.xlsx or .xls)")
+    p.add_argument("input", help="Path to the Excel workbook to analyze (.xlsx)")
     return p
 
 
@@ -941,6 +962,10 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     args = build_arg_parser().parse_args(argv)
     input_path = _resolve_input(args.input)
+
+    reason = unsupported_workbook_reason(input_path)
+    if reason:
+        raise SystemExit(f"Cannot parse '{input_path.name}': {reason}")
 
     print(f"Processing: {input_path}")
     dictionary = load_dictionary()

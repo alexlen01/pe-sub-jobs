@@ -3,9 +3,12 @@ r"""
 Batch-process Excel files organized by subdirectories.
 
 Walks through a directory hierarchy where each subdirectory represents an Agent Bank and contains
-individual Excel files (.xlsx/.xls). For each file, analyzes it and generates a
+individual Excel workbooks (.xlsx). For each file, analyzes it and generates a
 <slug>.xlsx template. Features robust data validation to skip Legend, Notes, and
 metadata rows.
+
+Reads .xlsx only. A legacy .xls workbook is skipped at discovery and listed in the run summary
+saying so, rather than failing part-way through its parse.
 
 All generated templates are collected to <input_directory>/bb_templates/. Processing results
 are printed to stdout as a run summary; no summary file is written.
@@ -50,6 +53,7 @@ try:
         ExcelAnalyzer,
         TemplateBuilder,
         load_dictionary,
+        unsupported_workbook_reason,
         Dictionary,
     )
 except ImportError as e:
@@ -281,11 +285,28 @@ def process_agent_bb_directory(input_dir: Path) -> tuple[int, int, int]:
         agent_name = agent_dir.name
         logger.info(f"\nProcessing Agent Bank: {agent_name}")
 
-        # Find all .xlsx files in this subdirectory
-        xlsx_files = sorted(agent_dir.glob("*.xlsx")) + sorted(agent_dir.glob("*.xls"))
+        # Find the workbooks this parser can actually read, and name the ones it cannot. A
+        # legacy .xls discovered here would fail deep inside openpyxl with an XML error; refused
+        # at discovery it becomes a line in the run summary telling the operator to re-save it.
+        xlsx_files = sorted(agent_dir.glob("*.xlsx"))
+        legacy_files = sorted(p for p in agent_dir.glob("*.xls") if p.is_file())
+
+        for legacy_path in legacy_files:
+            reason = unsupported_workbook_reason(legacy_path)
+            logger.warning(f"  Skipping {legacy_path.name}: {reason}")
+            log_records.append({
+                "Agent Bank": agent_name,
+                "Source File": legacy_path.name,
+                "Template Generated": "NO",
+                "Output File": "",
+                "Status": "SKIPPED",
+                "Notes": reason,
+            })
+            files_skipped += 1
 
         if not xlsx_files:
-            logger.warning(f"  No Excel files found in {agent_dir}")
+            if not legacy_files:
+                logger.warning(f"  No Excel files found in {agent_dir}")
             continue
 
         logger.info(f"  Found {len(xlsx_files)} file(s)")

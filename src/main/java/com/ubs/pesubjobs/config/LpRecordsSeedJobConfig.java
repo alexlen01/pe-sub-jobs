@@ -41,14 +41,18 @@ public class LpRecordsSeedJobConfig {
     public Step lpRecordsSeedStep(JobRepository jobRepository,
                                    PlatformTransactionManager txManager,
                                    @Qualifier("lpFacilitySeedReader") FlatFileItemReader<LpFacilitySeedRow> reader,
-                                   @Qualifier("lpRecordsSeedWriter") ItemWriter<LpFacilitySeedRow> writer) {
+                                   @Qualifier("lpRecordsSeedWriter") ItemWriter<LpFacilitySeedRow> writer,
+                                   IngestTallyListener tallyListener) {
         return new StepBuilder("lpRecordsSeedStep", jobRepository)
                 .<LpFacilitySeedRow, LpFacilitySeedRow>chunk(50)
                 .transactionManager(txManager)
                 .reader(reader)
                 .writer(writer)
                 // No skip policy: a row that cannot be written fails the job rather than
-                // vanishing from the load.
+                // vanishing from the load. The API skips a pair it already holds, which is how
+                // this feed stays replayable — the listener counts those and fails the run only
+                // past the configured threshold.
+                .listener(tallyListener)
                 .build();
     }
 
@@ -107,7 +111,7 @@ public class LpRecordsSeedJobConfig {
     }
 
     @Bean("lpRecordsSeedWriter")
-    public ItemWriter<LpFacilitySeedRow> lpRecordsSeedWriter(PeSubApiClient apiClient) {
-        return chunk -> apiClient.seedLpRecords(List.copyOf(chunk.getItems()));
+    public ItemWriter<LpFacilitySeedRow> lpRecordsSeedWriter(PeSubApiClient apiClient, IngestTally tally) {
+        return chunk -> tally.record(apiClient.seedLpRecords(List.copyOf(chunk.getItems())));
     }
 }

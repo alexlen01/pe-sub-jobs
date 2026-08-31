@@ -41,11 +41,10 @@ DATA_DIR = JOBS_ROOT / "data"
 # ============================================================================================
 #  EDIT THIS for each run — the LP DB Export to process. Absolute, or relative to pe-sub-jobs/.
 # ============================================================================================
-EXPORT_FILE = DATA_DIR / "import" / "LP DB Export 2026.08.25.xlsx"
-
 AGENT_BANK_SUMMARY_FILE = DATA_DIR / "import" / "AgentBankSummaryRpt.xlsx"
-OUT_DIR = DATA_DIR / "out"              # all outputs land here
+EXPORT_FILE = DATA_DIR / "import" / "LP DB Export V2.xlsx"
 REFERENCE_DIR = DATA_DIR / "reference"  # normalization lists
+OUT_DIR = DATA_DIR / "out"              # all outputs land here
 
 # --- source columns -------------------------------------------------------------------------
 # Internal names for the export's columns, in the order the V2 format lists them. Region and
@@ -212,8 +211,24 @@ SEED_COLS = [
 ]
 FACILITY_COLS = [
     "agent_bank", "name", "account_number", "loan_amount", "maturity_date", "bank_status",
-    "bank_status_date", "ubs_participation", "collateral_date",
+    "bank_status_date", "ubs_participation", "collateral_date", "umbrella_name",
 ]
+
+# One account number carrying MORE THAN ONE facility is an umbrella subscription facility: several
+# related funds, feeders or SPVs borrowing under one credit agreement, which is why the agent
+# reports them against a single account. Each member keeps its own LP roster and its own borrowing
+# base; the umbrella is the layer above them.
+#
+# The grouping is decided HERE, and stated on the facility row, rather than left to the ingest to
+# notice: the ingest reads the feed in chunks and never has the whole file in view, so it cannot
+# see that two facilities several hundred rows apart share an account. This script does.
+#
+# The name is minted from the account number because the account number is the only thing the two
+# source files actually say about the group. Neither states a group name, and no member's own
+# borrower name is the group's - a member is one fund under the umbrella, not the umbrella. The
+# ingest keys the umbrella on the account number rather than on this name, so an analyst renaming it
+# to what the credit agreement calls it is safe and survives every later run.
+UMBRELLA_NAME_PREFIX = "Umbrella "
 
 # Agent Bank Summary column layout (must match the report header exactly). Index 4 is an unnamed
 # spacer holding the report's subtotal amounts.
@@ -758,8 +773,10 @@ def read_agent_bank_summary(path: Path) -> tuple[list[list[str]], dict[str, int]
         printed = _norm(name)                             # for the FndName join below
         # The row's own Agent cell wins if the report fills it; otherwise the carried-down header.
         # "Unknown" satisfies FacilityRowProcessor's non-blank agent_bank rule.
+        # The trailing blanks are ubs_participation, collateral_date and umbrella_name - none of
+        # which the report states. The last two are filled in by upsert_facilities.
         data.append([text[0] or agent or "Unknown", name, acct, text[3], iso_date(cells[5]),
-                     text[6], iso_date(cells[7]), "", ""])
+                     text[6], iso_date(cells[7]), "", "", ""])
         # Every borrower on the account, in report order: an account listed against two borrowers
         # is two facilities and both stay eligible for the LP join.
         by_acct.setdefault(acct, []).append((len(data) - 1, printed))
@@ -859,7 +876,13 @@ def build_master(export: list[dict], ref: Reference) -> list[dict]:
             "funding_ratio": "",
             "ubs_lp_category": map_ubs_cls(_latest(rows, "UbsClassification"), ref)[0],
             "ubs_default_advance_rate": floor_rate_frac(_latest(rows, "UBSAR"), ref),
-            "ubs_default_concentration_limit": dec_str(_latest(rows, "UBSCL")),
+            # The two columns beside each other are on DIFFERENT scales, and deliberately so: the
+            # advance rate is stored as a fraction (0.90), while a concentration limit is stored on
+            # the percent-or-dollars encoding a limit shares with the LP record it defaults - a
+            # percent of total uncalled (25) or an absolute dollar cap (25000000), told apart by
+            # magnitude. The export states both as fractions, so the limit is converted here exactly
+            # as it is for the seed rows; passing 0.25 through would be read back as 0.25%.
+            "ubs_default_concentration_limit": pct(_latest(rows, "UBSCL")),
             "notes": _latest(rows, "Notes"),
         })
 
@@ -1077,7 +1100,7 @@ def upsert_facilities(fac_data: list[list[str]], by_acct: dict[str, list[tuple[i
         acctno = acctno_by_key[key]
         name = fnd_by_key[key] or (f"Unknown Facility {acctno}" if acctno
                                    else "Unknown Facility (no account)")
-        out.append(["Unknown", name, acctno, "", "", "Inactive", "", "", bbdate_by_key[key]])
+        out.append(["Unknown", name, acctno, "", "", "Inactive", "", "", bbdate_by_key[key], ""])
         row_by_key[key] = len(out) - 1
 
     # --- unique names ------------------------------------------------------------------------
@@ -1102,6 +1125,39 @@ def upsert_facilities(fac_data: list[list[str]], by_acct: dict[str, list[tuple[i
 
     name_by_key = {key: out[idx][1] for key, idx in row_by_key.items()}
     return out, name_by_key
+
+
+def assign_umbrellas(rows: list[list[str]]) -> "OrderedDict[str, list[str]]":
+    """Stamp `umbrella_name` on every facility that shares its account number with another, and
+    return {account number -> member facility names} for the run report.
+
+    Runs over the FINAL facility rows - the reported ones and the manufactured placeholders
+    together - because an umbrella is a fact about the account, and a member the report omits is
+    still a member. Running it over the report alone would leave an umbrella half-declared.
+
+    A blank account number never groups. Blank is the absence of an account, not an account that
+    several facilities happen to hold in common, and pooling every accountless facility into one
+    umbrella would invent a credit agreement out of missing data.
+
+    Cross-collateralization is deliberately NOT inferred here. Whether the members' commitments
+    support one common borrowing base is a term of the credit agreement; neither source file states
+    it, and a guess would read downstream as the legal position. It is left at its conservative
+    default for an analyst to set."""
+    by_acct: "OrderedDict[str, list[int]]" = OrderedDict()
+    for i, row in enumerate(rows):
+        acct = row[2].strip()
+        if acct:
+            by_acct.setdefault(acct, []).append(i)
+
+    groups: "OrderedDict[str, list[str]]" = OrderedDict()
+    for acct, idxs in by_acct.items():
+        if len(idxs) < 2:
+            continue
+        name = f"{UMBRELLA_NAME_PREFIX}{acct}"
+        for i in idxs:
+            rows[i][9] = name
+        groups[acct] = [rows[i][1] for i in idxs]
+    return groups
 
 
 def write_csv(path: Path, header: list[str], rows: list[dict]) -> None:
@@ -1135,6 +1191,9 @@ def main() -> int:
     # Facilities first: manufactures placeholders for orphan accounts and returns the
     # account -> facility name map the seed uses, so every LP record resolves to a facility.
     fac_rows, name_by_key = upsert_facilities(fac_data, by_acct, export)
+    # After the names are final, so the umbrella reports the members under the names the platform
+    # will know them by rather than the ones the report printed.
+    umbrellas = assign_umbrellas(fac_rows)
     master_rows = build_master(export, ref)
     sr = build_seed(export, name_by_key, ref)
 
@@ -1181,19 +1240,19 @@ def main() -> int:
     print(f"export facilities      : {len(name_by_key)} "
           f"(distinct AccountID+FndName pairs over {len({k[0] for k in name_by_key})} accounts)")
 
-    # An account carrying more than one fund is legal, so it is reported rather than failed.
-    shared: "OrderedDict[str, list[str]]" = OrderedDict()
-    for key, fac_name in name_by_key.items():
-        shared.setdefault(key[0], []).append(fac_name)
-    shared = OrderedDict((a, n) for a, n in shared.items() if len(n) > 1)
-    if shared:
+    # An account carrying more than one facility is an umbrella subscription facility, and is
+    # reported rather than failed: it is a normal structure, not a data fault. Each member keeps its
+    # own LP records and its own borrowing base - the umbrella groups them, it does not merge them.
+    if umbrellas:
         print()
-        print(f"shared AccountIDs      : {len(shared)} account(s) carry more than one FndName; "
-              "each fund is its own facility and keeps its own LP records")
-        for acct, names in list(shared.items())[:20]:
-            print(f"  {acct or '(blank)':<12}: {', '.join(names)}")
-        if len(shared) > 20:
-            print(f"  ... and {len(shared) - 20} more")
+        print(f"umbrella facilities    : {len(umbrellas)} account(s) carry more than one facility; "
+              "each is fed as one umbrella and its funds as members")
+        for acct, names in list(umbrellas.items())[:20]:
+            print(f"  {UMBRELLA_NAME_PREFIX}{acct:<12}: {', '.join(names)}")
+        if len(umbrellas) > 20:
+            print(f"  ... and {len(umbrellas) - 20} more")
+        print("  cross-collateralization is a term of the credit agreement, is stated by neither "
+              "source file, and is left for an analyst to set")
 
     # Normalization outcomes. These are not failures - the value is written through unchanged - but
     # a non-zero count means a reference list is behind the feed and should be topped up.

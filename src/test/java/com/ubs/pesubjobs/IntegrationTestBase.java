@@ -17,7 +17,11 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 @AutoConfigureMockMvc
 @TestPropertySource(properties = {
     "ingest.run-on-startup=false",
-    "bb-template-import.enabled=false"
+    "bb-template-import.enabled=false",
+    // Caller-named feed files resolve against a committed fixture directory rather than data/out,
+    // which is generated output and absent on a clean checkout. Set here, not per test, so every
+    // test shares one application context.
+    "ingest.import-root=src/test/resources/feeds"
 })
 public abstract class IntegrationTestBase {
 

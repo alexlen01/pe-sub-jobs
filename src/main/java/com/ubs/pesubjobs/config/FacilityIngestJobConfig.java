@@ -38,7 +38,8 @@ public class FacilityIngestJobConfig {
                                    PlatformTransactionManager txManager,
                                    @Qualifier("facilityReader") FlatFileItemReader<FacilityRow> facilityReader,
                                    FacilityRowProcessor facilityProcessor,
-                                   @Qualifier("facilityWriter") ItemWriter<ProcessedFacility> facilityWriter) {
+                                   @Qualifier("facilityWriter") ItemWriter<ProcessedFacility> facilityWriter,
+                                   IngestTallyListener tallyListener) {
         return new StepBuilder("facilityIngestStep", jobRepository)
                 .<FacilityRow, ProcessedFacility>chunk(50)
                 .transactionManager(txManager)
@@ -46,7 +47,9 @@ public class FacilityIngestJobConfig {
                 .processor(facilityProcessor)
                 .writer(facilityWriter)
                 // No skip policy: a row that cannot be written fails the job rather than
-                // vanishing from the load.
+                // vanishing from the load. Rows the API itself refuses are counted by the
+                // listener, which fails the run past the configured threshold.
+                .listener(tallyListener)
                 .build();
     }
 
@@ -58,10 +61,12 @@ public class FacilityIngestJobConfig {
                 .name("facilityReader")
                 .resource(new FileSystemResource(filePath))
                 .linesToSkip(1)
+                // umbrellaName is last, and the tokenizer is lenient, so a feed written before the
+                // column existed still loads: its rows simply state no umbrella.
                 .lineTokenizer(CsvLineTokenizers.lenientQuotedCsvTokenizer(
                         "agentBank", "name", "accountNumber", "loanAmount",
                         "maturityDate", "bankStatus", "bankStatusDate",
-                        "ubsParticipation", "collateralDate"))
+                        "ubsParticipation", "collateralDate", "umbrellaName"))
                 .fieldSetMapper(fs -> new FacilityRow(
                         fs.readString("agentBank"),
                         fs.readString("name"),
@@ -71,7 +76,8 @@ public class FacilityIngestJobConfig {
                         fs.readString("bankStatus"),
                         fs.readString("bankStatusDate"),
                         fs.readString("ubsParticipation"),
-                        fs.readString("collateralDate")
+                        fs.readString("collateralDate"),
+                        fs.readString("umbrellaName")
                 ))
                 .build();
     }
@@ -86,7 +92,7 @@ public class FacilityIngestJobConfig {
      * pe-sub-api owns the facilities schema — this app issues no SQL against it.
      */
     @Bean("facilityWriter")
-    public ItemWriter<ProcessedFacility> facilityWriter(PeSubApiClient apiClient) {
-        return chunk -> apiClient.ingestFacilities(List.copyOf(chunk.getItems()));
+    public ItemWriter<ProcessedFacility> facilityWriter(PeSubApiClient apiClient, IngestTally tally) {
+        return chunk -> tally.record(apiClient.ingestFacilities(List.copyOf(chunk.getItems())));
     }
 }

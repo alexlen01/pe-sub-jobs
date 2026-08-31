@@ -83,6 +83,43 @@ class FacilityIngestJobTest extends IntegrationTestBase {
         assertThat(rows.get(1).agentBank()).isNull();
     }
 
+    @Test
+    void carriesTheUmbrellaTheFeedStates() throws Exception {
+        // Two funds reported on one account number is an umbrella subscription facility. The feed
+        // states the grouping outright; this job never works it out, because it reads the file in
+        // chunks and so never has enough of it in view to notice two rows sharing an account.
+        JobExecution execution = runFeed("""
+                "agent_bank","name","account_number","loan_amount","maturity_date","bank_status","bank_status_date","ubs_participation","collateral_date","umbrella_name"
+                "Bank of America","Carlyle Buyout Umbrella","5VZ8873","100000000","2028-01-12","Active","2026-05-13","","2026-04-28","Umbrella 5VZ8873"
+                "Bank of America","Oaktree Opportunities Fund Xb","5VZ8873","112000000","2027-07-21","Active","2025-07-23","","2025-11-24","Umbrella 5VZ8873"
+                "Bank of America","HIG LBO IV","5VX1796","75000000","10/26/2026","Active","5/21/2026","9502500.00","2026-06-09",""
+                """);
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
+        List<ProcessedFacility> rows = capturedFacilityRows();
+        assertThat(rows)
+                .extracting((ProcessedFacility f) -> f.umbrellaName())
+                // A fund that borrows alone states no umbrella, and blank arrives as null rather
+                // than as an empty group name.
+                .containsExactly("Umbrella 5VZ8873", "Umbrella 5VZ8873", null);
+    }
+
+    @Test
+    void feedWrittenBeforeTheUmbrellaColumnExisted_stillLoads() throws Exception {
+        // The umbrella column is last and the tokenizer is lenient, so a nine-column feed loads and
+        // simply states no umbrella — an older feed file is never a failed run.
+        JobExecution execution = runFeed("""
+                "agent_bank","name","account_number","loan_amount","maturity_date","bank_status","bank_status_date","ubs_participation","collateral_date"
+                "Bank of America","HIG LBO IV","5VX1796","75000000","10/26/2026","Active","5/21/2026","9502500.00","2026-06-09"
+                """);
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
+        List<ProcessedFacility> rows = capturedFacilityRows();
+        assertThat(rows).hasSize(1);
+        assertThat(rows.getFirst().name()).isEqualTo("HIG LBO IV");
+        assertThat(rows.getFirst().umbrellaName()).isNull();
+    }
+
     private List<ProcessedFacility> capturedFacilityRows() {
         ArgumentCaptor<List<ProcessedFacility>> captor = ArgumentCaptor.captor();
         verify(apiClient).ingestFacilities(captor.capture());

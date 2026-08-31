@@ -34,9 +34,22 @@
       <artifactId>spring-boot-starter-web</artifactId>
     </dependency>
 
+    <!-- The /jobs trigger executes feeds that rewrite LP Master and facilities wholesale, so it
+         is gated on the same gateway-asserted identity pe-sub-api uses, restricted to SERVICE. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-security</artifactId>
+    </dependency>
+
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.security</groupId>
+      <artifactId>spring-security-test</artifactId>
       <scope>test</scope>
     </dependency>
     <!-- Boot 4.x modularized test support: MockMvc auto-configuration

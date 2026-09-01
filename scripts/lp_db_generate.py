@@ -446,17 +446,27 @@ def _unit_plain(rng: random.Random, accts: set[str], names: set[str]) -> list[tu
                  maturity, status)]
 
 
-def _unit_tranche(rng: random.Random, accts: set[str], names: set[str]) -> list[tuple]:
+def _unit_tranche(rng: random.Random, accts: set[str], names: set[str],
+                  case_split: bool = False) -> list[tuple]:
     """The two sleeves of one credit agreement: "<Fund> (Committed)" and "<Fund> (Uncommitted)".
 
     Two facilities over ONE LP roster - the export mirrors the committed sleeve's positions onto the
     uncommitted one - so they share a maturity and a status date, and the report prints them under
     two consecutive accounts. The base name is minted undamaged because both sleeves have to carry
-    the SAME base for tranche_base_name to pair them; the upper-casing is applied to both at once,
-    which is exactly how "COMVEST CREDIT PARTNERS VII (COMMITTED)" reaches the file."""
+    the SAME base to pair them, and only the CASE is allowed to differ: the sleeves are set up in the
+    agent's system one at a time, so "COMVEST CREDIT PARTNERS VII (COMMITTED)" reaching the file
+    beside "Comvest Credit Partners VII (Uncommitted)" is an ordinary way for one credit agreement
+    to arrive. The extract folds case before pairing, and minting the split spelling here is what
+    holds it to that - a pair left ungrouped has its one borrowing base counted once per sleeve.
+
+    `case_split` forces that spelling, for the caller that floors it into every population. One rng
+    draw is taken either way, so forcing it moves no other structure off its seed."""
     base = _mint_name(rng, names, damage=False)
     committed, uncommitted = f"{base} (Committed)", f"{base} (Uncommitted)"
-    if rng.random() < NAME_UPPER_RATE * 2:
+    roll = rng.random()
+    if case_split or NAME_UPPER_RATE * 2 <= roll < NAME_UPPER_RATE * 3:
+        committed = committed.upper()          # one sleeve typed in caps, the other not
+    elif roll < NAME_UPPER_RATE * 2:
         committed, uncommitted = committed.upper(), uncommitted.upper()
     names.update((_norm(committed), _norm(uncommitted)))
     first, second = _mint_account_pair(rng, accts)
@@ -559,7 +569,11 @@ def build_roster() -> tuple[list[tuple], list[tuple[str, str]]]:
     umbrella_rows = max(2, round(ROSTER_FACILITIES * UMBRELLA_ROW_SHARE))
 
     units: list[list[tuple]] = []
-    units += [_unit_tranche(rng, accts, names) for _ in range(tranche_units)]
+    # One pair is minted with its sleeves cased differently, floored the way every other structure
+    # is. Left to its own rate the split spelling rounds away from a population this size about half
+    # the time, and a roster without it renders and extracts perfectly while quietly no longer
+    # proving the extract folds case before pairing sleeves.
+    units += [_unit_tranche(rng, accts, names, case_split=(i == 0)) for i in range(tranche_units)]
     units += [_unit_split(rng, accts, names) for _ in range(split_units)]
     units += [_unit_reprint(rng, accts, names) for _ in range(reprint_units)]
     while umbrella_rows >= 2:
@@ -699,12 +713,19 @@ AGENT_BY_NAME = {c: (c, rate, limit) for c, rate, limit, _ in AGENT_CATEGORIES}
 # per draw. Each carries its own facility ID, credit limit and draw availability; each has its own
 # fee and pricing mechanics (an unused-commitment fee of 25-50bps accrues on the committed line's
 # undrawn portion and on nothing else; an uncommitted draw may price at a different margin); and
-# the agent bank requires a SEPARATE Borrowing Base Certificate per facility ID, so the two
-# collateral pools are never blended and each tranche's headroom is tracked on its own.
+# the agent bank requires a SEPARATE Borrowing Base Certificate per facility ID, so each tranche's
+# headroom is certified and tracked on its own.
 #
 # Per the Day 1 agreement with the business, the platform therefore treats each sleeve as its own
 # record - which is why the generator emits each as its own facility rather than folding the pair
 # into one, and why this section exists to keep it doing so.
+#
+# What the sleeves DO share is the collateral. One borrower pledges one LP roster once, and both
+# certificates are drawn against it - which is why this generator mirrors the committed sleeve's
+# positions onto the uncommitted one rather than minting a second roster. Two records over one
+# pool, certified twice and pledged once, so a report that adds the sleeves' bases together counts
+# the collateral twice over. The extract states the pair as one cross-collateralized group and the
+# platform divides that one base between them; see lp_db_extract.assign_umbrellas.
 #
 # What separates the two rows for the same LP is the CREDIT TERMS. The LP that advances at 90% on
 # the committed line is haircut a rung down the schedule on the uncommitted one and tested against
@@ -1434,6 +1455,19 @@ def validate_roster() -> None:
     if not any(tranche_of(name) for _a, _s, rows in ABS_ROSTER for name, *_ in rows):
         problems.append("the roster states no '(Committed)' / '(Uncommitted)' pair, so the tranche "
                         "mirror pass has nothing to mirror")
+    # The sleeves are set up in the agent's system one at a time, so a pair spelt two ways is an
+    # ordinary arrival, and it is the only thing proving the extract folds case before pairing.
+    # A pair it fails to group has its one borrowing base counted once per sleeve.
+    spellings: dict[str, set[str]] = {}
+    for _a, _s, rows in ABS_ROSTER:
+        for name, *_ in rows:
+            if tranche_of(name):
+                spellings.setdefault(tranche_base_name(name), set()).add(
+                    TRANCHE_SUFFIX_RE.sub("", name).strip())
+    if not any(len(spelt) > 1 for spelt in spellings.values()):
+        problems.append("every tranche pair spells its base name identically across both sleeves, "
+                        "so nothing states that case alone must not decide whether the sleeves are "
+                        "grouped onto one borrowing base")
 
     # The remaining structures a MINTED population could round away. Each is a distinct thing the
     # ingestion has to get right, and none of them announces its absence: a roster without them

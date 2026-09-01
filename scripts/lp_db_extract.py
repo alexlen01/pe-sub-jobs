@@ -1201,26 +1201,36 @@ def assign_umbrellas(rows: list[list[str]]) -> list[UmbrellaGroup]:
     claimed: set[int] = set()
     groups: list[UmbrellaGroup] = []
 
-    # Tranche sets first, keyed on the shared base name.
+    # Tranche sets first, keyed on the shared base name through _norm(). The sleeves are typed by
+    # hand into the agent's system one at a time, so the pair reaches the file spelt the same way
+    # only by habit - "MERRIDEN OPPORTUNITIES FUND V (COMMITTED)" beside "Merriden Opportunities
+    # Fund V (Uncommitted)" is one credit agreement whichever way the shift key fell. Matching on
+    # the literal name would leave that pair ungrouped and its one borrowing base counted twice.
+    #
+    # The normalized form is also what the group is KEYED by, so the key holds still when a later
+    # run receives the same pair spelt differently. Keying on whichever spelling this run happened
+    # to read first would resolve to a different group next time and build a duplicate beside it.
     by_base: "OrderedDict[str, list[int]]" = OrderedDict()
     for i, row in enumerate(rows):
         base = tranche_base_name(row[1].strip())
         if base:
-            by_base.setdefault(base, []).append(i)
+            by_base.setdefault(_norm(base), []).append(i)
 
-    for base, idxs in by_base.items():
+    for key, idxs in by_base.items():
         if len(idxs) < 2:
             continue  # a lone sleeve is just a facility with a parenthetical in its name
         # The base name IS the credit agreement's name, so it is used as-is - unless a facility of
         # its own already answers to it, in which case the group takes the prefixed form to keep
-        # the two apart on screen.
-        name = base if _norm(base) not in taken_names else f"{UMBRELLA_NAME_PREFIX}{base}"
+        # the two apart on screen. Taken from the first sleeve, since the key is normalized and the
+        # analyst should read the agreement's name as the file spells it, not folded flat.
+        base = tranche_base_name(rows[idxs[0]][1].strip()) or key
+        name = base if key not in taken_names else f"{UMBRELLA_NAME_PREFIX}{base}"
         for i in idxs:
             rows[i][9] = name
-            rows[i][10] = base
+            rows[i][10] = key
             rows[i][11] = "true"
             claimed.add(i)
-        groups.append(UmbrellaGroup(base, name, [rows[i][1] for i in idxs], True))
+        groups.append(UmbrellaGroup(key, name, [rows[i][1] for i in idxs], True))
 
     # Then account umbrellas, over whatever the tranche pass did not claim.
     by_acct: "OrderedDict[str, list[int]]" = OrderedDict()

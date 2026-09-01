@@ -11,8 +11,14 @@ public record FacilityRow(
         String ubsParticipation,
         String collateralDate,
         // The umbrella subscription facility this fund borrows under, blank when it borrows alone.
-        // Stated by the feed rather than worked out here: an umbrella is an account carrying more
-        // than one facility, and this job reads the feed in chunks, so it never sees enough of the
-        // file at once to notice.
-        String umbrellaName
+        // Stated by the feed rather than worked out here: a group spans several facility rows, and
+        // this job reads the feed in chunks, so it never sees enough of the file at once to notice.
+        String umbrellaName,
+        // What the group is resolved by — an account number where its members share one, the credit
+        // agreement where they hold one each. Blank falls back to the account number on the API side.
+        String umbrellaKey,
+        // "true" where the group's members stand on ONE borrowing base, so the base each of them
+        // carries is the same base. Blank where the feed cannot know, which is every group but the
+        // sleeves of a multi-tranche facility.
+        String umbrellaCrossCollateralized
 ) {}

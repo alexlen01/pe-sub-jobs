@@ -13,5 +13,9 @@ public record ProcessedFacility(
         LocalDate bankStatusDate,
         BigDecimal ubsParticipation,
         LocalDate collateralDate,
-        String umbrellaName
+        String umbrellaName,
+        String umbrellaKey,
+        // Null where the feed cannot know whether the group's members stand on one borrowing base,
+        // which never turns an existing group's shared base off on the API side.
+        Boolean umbrellaCrossCollateralized
 ) {}

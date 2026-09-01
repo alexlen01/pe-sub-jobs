@@ -36,8 +36,17 @@ public class FacilityRowProcessor implements ItemProcessor<FacilityRow, Processe
                 parseDate(item.bankStatusDate()),
                 parseDecimal(item.ubsParticipation()),
                 parseDate(item.collateralDate()),
-                blankToNull(item.umbrellaName())
+                blankToNull(item.umbrellaName()),
+                blankToNull(item.umbrellaKey()),
+                parseBoolean(item.umbrellaCrossCollateralized())
         );
+    }
+
+    /** Null, not false, for a blank cell: the feed states a shared borrowing base only where it can
+     *  know of one, and silence must not read as a statement that there is none. */
+    private Boolean parseBoolean(String s) {
+        String v = blankToNull(s);
+        return v == null ? null : Boolean.valueOf("true".equalsIgnoreCase(v) || "1".equals(v));
     }
 
     private String blankToNull(String s) {

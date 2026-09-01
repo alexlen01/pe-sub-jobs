@@ -212,6 +212,7 @@ SEED_COLS = [
 FACILITY_COLS = [
     "agent_bank", "name", "account_number", "loan_amount", "maturity_date", "bank_status",
     "bank_status_date", "ubs_participation", "collateral_date", "umbrella_name",
+    "umbrella_key", "cross_collateralized",
 ]
 
 # One account number carrying MORE THAN ONE facility is an umbrella subscription facility: several
@@ -226,9 +227,35 @@ FACILITY_COLS = [
 # The name is minted from the account number because the account number is the only thing the two
 # source files actually say about the group. Neither states a group name, and no member's own
 # borrower name is the group's - a member is one fund under the umbrella, not the umbrella. The
-# ingest keys the umbrella on the account number rather than on this name, so an analyst renaming it
+# ingest keys the umbrella on `umbrella_key` rather than on this name, so an analyst renaming it
 # to what the credit agreement calls it is safe and survives every later run.
 UMBRELLA_NAME_PREFIX = "Umbrella "
+
+# The other shape of one credit agreement: a multi-tranche facility, reported as one sleeve per
+# tranche - "<fund> (Committed)" and "<fund> (Uncommitted)". The sleeves are the SAME borrower on
+# the SAME collateral, split by how much of the commitment is contractually firm, so each is
+# certified separately and the agent gives each its own account number.
+#
+# That is why they cannot be found the way an account umbrella is found: the sleeves of one facility
+# never share an account. They share a name, less the suffix, and that is what groups them here.
+#
+# A tranche set stands on ONE borrowing base by construction - one borrower, one LP roster, one
+# collateral pool - so unlike an account umbrella this script CAN state cross-collateralization
+# for it, and does. Without it the platform would report the same base once per sleeve and count
+# the collateral twice over.
+TRANCHE_SUFFIX_RE = re.compile(r"\s*\((committed|uncommitted)\)\s*$", re.I)
+
+
+def tranche_base_name(name: str) -> str | None:
+    """The facility name with its tranche suffix removed, or None where it carries no suffix.
+
+    The suffix is what makes a name a sleeve of something larger. A name without one is a whole
+    facility and is never folded into a tranche set on a base-name match alone: "Fund X" standing
+    beside "Fund X (Committed)" is a separate credit agreement until someone says otherwise, and
+    grouping the two would put a full facility's borrowing base under an allocated share of a
+    pool it is not part of."""
+    base = TRANCHE_SUFFIX_RE.sub("", name).strip()
+    return base if base and TRANCHE_SUFFIX_RE.search(name) else None
 
 # Agent Bank Summary column layout (must match the report header exactly). Index 4 is an unnamed
 # spacer holding the report's subtotal amounts.
@@ -773,10 +800,11 @@ def read_agent_bank_summary(path: Path) -> tuple[list[list[str]], dict[str, int]
         printed = _norm(name)                             # for the FndName join below
         # The row's own Agent cell wins if the report fills it; otherwise the carried-down header.
         # "Unknown" satisfies FacilityRowProcessor's non-blank agent_bank rule.
-        # The trailing blanks are ubs_participation, collateral_date and umbrella_name - none of
-        # which the report states. The last two are filled in by upsert_facilities.
+        # The trailing blanks are ubs_participation, collateral_date, and the three umbrella
+        # columns - none of which the report states. collateral_date is filled in by
+        # upsert_facilities and the umbrella columns by assign_umbrellas.
         data.append([text[0] or agent or "Unknown", name, acct, text[3], iso_date(cells[5]),
-                     text[6], iso_date(cells[7]), "", "", ""])
+                     text[6], iso_date(cells[7]), "", "", "", "", ""])
         # Every borrower on the account, in report order: an account listed against two borrowers
         # is two facilities and both stay eligible for the LP join.
         by_acct.setdefault(acct, []).append((len(data) - 1, printed))
@@ -1100,7 +1128,8 @@ def upsert_facilities(fac_data: list[list[str]], by_acct: dict[str, list[tuple[i
         acctno = acctno_by_key[key]
         name = fnd_by_key[key] or (f"Unknown Facility {acctno}" if acctno
                                    else "Unknown Facility (no account)")
-        out.append(["Unknown", name, acctno, "", "", "Inactive", "", "", bbdate_by_key[key], ""])
+        out.append(["Unknown", name, acctno, "", "", "Inactive", "", "", bbdate_by_key[key],
+                    "", "", ""])
         row_by_key[key] = len(out) - 1
 
     # --- unique names ------------------------------------------------------------------------
@@ -1127,36 +1156,89 @@ def upsert_facilities(fac_data: list[list[str]], by_acct: dict[str, list[tuple[i
     return out, name_by_key
 
 
-def assign_umbrellas(rows: list[list[str]]) -> "OrderedDict[str, list[str]]":
-    """Stamp `umbrella_name` on every facility that shares its account number with another, and
-    return {account number -> member facility names} for the run report.
+@dataclass
+class UmbrellaGroup:
+    """One credit agreement covering more than one facility row, as this run found it."""
+    key: str                    # what the ingest resolves the group by - stable across runs
+    name: str                   # minted here; an analyst may rename it without breaking the key
+    members: list[str]          # member facility names, in run order
+    cross_collateralized: bool  # True only where the members demonstrably stand on ONE base
+
+
+def assign_umbrellas(rows: list[list[str]]) -> list[UmbrellaGroup]:
+    """Stamp `umbrella_name`, `umbrella_key` and `cross_collateralized` on every facility that
+    belongs to a group, and return the groups for the run report.
+
+    Two shapes of group are found, and they are found differently:
+
+      * a TRANCHE SET - sleeves of one multi-tranche facility, sharing a name less its
+        "(Committed)"/"(Uncommitted)" suffix. One borrower on one collateral pool, so the group is
+        marked cross-collateralized and the platform allocates the shared base across the sleeves
+        instead of counting it once per sleeve.
+      * an ACCOUNT UMBRELLA - separate funds, feeders or SPVs borrowing under one credit agreement,
+        which the agent reports against a single account number. Each member keeps its own LP
+        roster and its own borrowing base.
 
     Runs over the FINAL facility rows - the reported ones and the manufactured placeholders
-    together - because an umbrella is a fact about the account, and a member the report omits is
-    still a member. Running it over the report alone would leave an umbrella half-declared.
+    together - because a group is a fact about the credit agreement, and a member the report omits
+    is still a member. Running it over the report alone would leave a group half-declared.
 
     A blank account number never groups. Blank is the absence of an account, not an account that
     several facilities happen to hold in common, and pooling every accountless facility into one
     umbrella would invent a credit agreement out of missing data.
 
-    Cross-collateralization is deliberately NOT inferred here. Whether the members' commitments
-    support one common borrowing base is a term of the credit agreement; neither source file states
-    it, and a guess would read downstream as the legal position. It is left at its conservative
-    default for an analyst to set."""
+    Tranche sets are claimed first and their members are then withheld from account grouping, so no
+    facility lands in two groups. The sleeves are the tighter and better-evidenced structure: they
+    share collateral, where account members merely share paperwork. An account left with one
+    unclaimed member does not form - correctly, since it no longer groups anything.
+
+    Cross-collateralization is deliberately NOT inferred for an account umbrella. Whether its
+    members' commitments support one common borrowing base is a term of the credit agreement;
+    neither source file states it, and a guess would read downstream as the legal position. The
+    column is left blank, which the ingest reads as "not stated" and never as "no".
+    """
+    taken_names = {_norm(row[1]) for row in rows}
+    claimed: set[int] = set()
+    groups: list[UmbrellaGroup] = []
+
+    # Tranche sets first, keyed on the shared base name.
+    by_base: "OrderedDict[str, list[int]]" = OrderedDict()
+    for i, row in enumerate(rows):
+        base = tranche_base_name(row[1].strip())
+        if base:
+            by_base.setdefault(base, []).append(i)
+
+    for base, idxs in by_base.items():
+        if len(idxs) < 2:
+            continue  # a lone sleeve is just a facility with a parenthetical in its name
+        # The base name IS the credit agreement's name, so it is used as-is - unless a facility of
+        # its own already answers to it, in which case the group takes the prefixed form to keep
+        # the two apart on screen.
+        name = base if _norm(base) not in taken_names else f"{UMBRELLA_NAME_PREFIX}{base}"
+        for i in idxs:
+            rows[i][9] = name
+            rows[i][10] = base
+            rows[i][11] = "true"
+            claimed.add(i)
+        groups.append(UmbrellaGroup(base, name, [rows[i][1] for i in idxs], True))
+
+    # Then account umbrellas, over whatever the tranche pass did not claim.
     by_acct: "OrderedDict[str, list[int]]" = OrderedDict()
     for i, row in enumerate(rows):
         acct = row[2].strip()
-        if acct:
+        if acct and i not in claimed:
             by_acct.setdefault(acct, []).append(i)
 
-    groups: "OrderedDict[str, list[str]]" = OrderedDict()
     for acct, idxs in by_acct.items():
         if len(idxs) < 2:
             continue
         name = f"{UMBRELLA_NAME_PREFIX}{acct}"
         for i in idxs:
             rows[i][9] = name
-        groups[acct] = [rows[i][1] for i in idxs]
+            rows[i][10] = acct
+            rows[i][11] = ""
+        groups.append(UmbrellaGroup(acct, name, [rows[i][1] for i in idxs], False))
+
     return groups
 
 
@@ -1173,7 +1255,9 @@ def write_facilities(path: Path, rows: list[list[str]]) -> None:
         w = csv.writer(fh, quoting=csv.QUOTE_ALL)
         w.writerow(FACILITY_COLS)
         for r in rows:
-            w.writerow(r[: len(FACILITY_COLS)])
+            # Padded as well as trimmed: a short row would write a ragged line the ingest reads
+            # one column out of step from the header.
+            w.writerow((r + [""] * len(FACILITY_COLS))[: len(FACILITY_COLS)])
 
 
 def main() -> int:
@@ -1240,17 +1324,31 @@ def main() -> int:
     print(f"export facilities      : {len(name_by_key)} "
           f"(distinct AccountID+FndName pairs over {len({k[0] for k in name_by_key})} accounts)")
 
-    # An account carrying more than one facility is an umbrella subscription facility, and is
-    # reported rather than failed: it is a normal structure, not a data fault. Each member keeps its
-    # own LP records and its own borrowing base - the umbrella groups them, it does not merge them.
-    if umbrellas:
+    # A credit agreement covering more than one facility is reported rather than failed: it is a
+    # normal structure, not a data fault. Members keep their own LP records - a group groups them,
+    # it does not merge them. Tranche sets and account umbrellas are listed apart because they
+    # differ in the one thing that changes the numbers: whether the members share a borrowing base.
+    tranches = [g for g in umbrellas if g.cross_collateralized]
+    accounts = [g for g in umbrellas if not g.cross_collateralized]
+    if tranches:
         print()
-        print(f"umbrella facilities    : {len(umbrellas)} account(s) carry more than one facility; "
+        print(f"multi-tranche facilities: {len(tranches)} facility(ies) are reported as more than "
+              "one tranche; each is fed as one cross-collateralized group and its sleeves as "
+              "members")
+        for g in tranches[:20]:
+            print(f"  {g.name:<40}: {', '.join(g.members)}")
+        if len(tranches) > 20:
+            print(f"  ... and {len(tranches) - 20} more")
+        print("  the sleeves stand on ONE borrowing base, so the platform allocates that base "
+              "across them pro rata to commitment rather than counting it once per sleeve")
+    if accounts:
+        print()
+        print(f"umbrella facilities    : {len(accounts)} account(s) carry more than one facility; "
               "each is fed as one umbrella and its funds as members")
-        for acct, names in list(umbrellas.items())[:20]:
-            print(f"  {UMBRELLA_NAME_PREFIX}{acct:<12}: {', '.join(names)}")
-        if len(umbrellas) > 20:
-            print(f"  ... and {len(umbrellas) - 20} more")
+        for g in accounts[:20]:
+            print(f"  {g.name:<40}: {', '.join(g.members)}")
+        if len(accounts) > 20:
+            print(f"  ... and {len(accounts) - 20} more")
         print("  cross-collateralization is a term of the credit agreement, is stated by neither "
               "source file, and is left for an analyst to set")
 

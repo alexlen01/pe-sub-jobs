@@ -105,9 +105,34 @@ class FacilityIngestJobTest extends IntegrationTestBase {
     }
 
     @Test
+    void carriesTheGroupKeyAndSharedBaseTheFeedStates() throws Exception {
+        // The sleeves of a multi-tranche facility hold DIFFERENT account numbers — each tranche is
+        // certified separately — so the account number cannot resolve the group and the feed states
+        // a key of its own. It also states that the sleeves stand on one borrowing base, which for
+        // a tranche set it can know: same borrower, same collateral, split only by commitment.
+        JobExecution execution = runFeed("""
+                "agent_bank","name","account_number","loan_amount","maturity_date","bank_status","bank_status_date","ubs_participation","collateral_date","umbrella_name","umbrella_key","cross_collateralized"
+                "Bank of America","Ares Direct Lending (Committed)","5VZ1001","60000000","2028-01-12","Active","2026-05-13","","2026-04-28","Ares Direct Lending","Ares Direct Lending","true"
+                "Bank of America","Ares Direct Lending (Uncommitted)","5VZ1002","40000000","2028-01-12","Active","2026-05-13","","2026-04-28","Ares Direct Lending","Ares Direct Lending","true"
+                "Bank of America","Carlyle Buyout Umbrella","5VZ8873","100000000","2028-01-12","Active","2026-05-13","","2026-04-28","Umbrella 5VZ8873","5VZ8873",""
+                """);
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
+        List<ProcessedFacility> rows = capturedFacilityRows();
+        assertThat(rows)
+                .extracting((ProcessedFacility f) -> f.umbrellaKey())
+                .containsExactly("Ares Direct Lending", "Ares Direct Lending", "5VZ8873");
+        // Blank is "not stated", not "no shared base": an account umbrella's terms are a matter for
+        // an analyst, and null is what stops the ingest reading silence as an answer.
+        assertThat(rows)
+                .extracting((ProcessedFacility f) -> f.umbrellaCrossCollateralized())
+                .containsExactly(true, true, null);
+    }
+
+    @Test
     void feedWrittenBeforeTheUmbrellaColumnExisted_stillLoads() throws Exception {
-        // The umbrella column is last and the tokenizer is lenient, so a nine-column feed loads and
-        // simply states no umbrella — an older feed file is never a failed run.
+        // The umbrella columns are last and the tokenizer is lenient, so a nine-column feed loads
+        // and simply states no umbrella — an older feed file is never a failed run.
         JobExecution execution = runFeed("""
                 "agent_bank","name","account_number","loan_amount","maturity_date","bank_status","bank_status_date","ubs_participation","collateral_date"
                 "Bank of America","HIG LBO IV","5VX1796","75000000","10/26/2026","Active","5/21/2026","9502500.00","2026-06-09"
@@ -118,6 +143,8 @@ class FacilityIngestJobTest extends IntegrationTestBase {
         assertThat(rows).hasSize(1);
         assertThat(rows.getFirst().name()).isEqualTo("HIG LBO IV");
         assertThat(rows.getFirst().umbrellaName()).isNull();
+        assertThat(rows.getFirst().umbrellaKey()).isNull();
+        assertThat(rows.getFirst().umbrellaCrossCollateralized()).isNull();
     }
 
     private List<ProcessedFacility> capturedFacilityRows() {

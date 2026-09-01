@@ -61,12 +61,14 @@ public class FacilityIngestJobConfig {
                 .name("facilityReader")
                 .resource(new FileSystemResource(filePath))
                 .linesToSkip(1)
-                // umbrellaName is last, and the tokenizer is lenient, so a feed written before the
-                // column existed still loads: its rows simply state no umbrella.
+                // The umbrella columns are last, and the tokenizer is lenient, so a feed written
+                // before any of them existed still loads: its rows simply state no umbrella, or
+                // state one without a key or a shared borrowing base, and the API falls back.
                 .lineTokenizer(CsvLineTokenizers.lenientQuotedCsvTokenizer(
                         "agentBank", "name", "accountNumber", "loanAmount",
                         "maturityDate", "bankStatus", "bankStatusDate",
-                        "ubsParticipation", "collateralDate", "umbrellaName"))
+                        "ubsParticipation", "collateralDate", "umbrellaName",
+                        "umbrellaKey", "umbrellaCrossCollateralized"))
                 .fieldSetMapper(fs -> new FacilityRow(
                         fs.readString("agentBank"),
                         fs.readString("name"),
@@ -77,7 +79,9 @@ public class FacilityIngestJobConfig {
                         fs.readString("bankStatusDate"),
                         fs.readString("ubsParticipation"),
                         fs.readString("collateralDate"),
-                        fs.readString("umbrellaName")
+                        fs.readString("umbrellaName"),
+                        fs.readString("umbrellaKey"),
+                        fs.readString("umbrellaCrossCollateralized")
                 ))
                 .build();
     }

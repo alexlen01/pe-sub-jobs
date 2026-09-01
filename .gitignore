@@ -18,3 +18,4 @@ logs/
 # data/out/    - generated CSVs derived from that real data
 data/import/
 data/out/
+data/bb-templates/

@@ -20,5 +20,15 @@ public record FacilityRow(
         // "true" where the group's members stand on ONE borrowing base, so the base each of them
         // carries is the same base. Blank where the feed cannot know, which is every group but the
         // sleeves of a multi-tranche facility.
-        String umbrellaCrossCollateralized
+        String umbrellaCrossCollateralized,
+        // Which sleeve of a multi-tranche facility this row is, and the facility it is a sleeve OF.
+        // Both blank on the ordinary facility. The feed states the relationship rather than the
+        // platform recovering it from a "(Committed)"/"(Uncommitted)" suffix, which finds only the
+        // sleeve names someone wrote a pattern for and misses a currency, term or accordion sleeve.
+        String trancheType,
+        String trancheOf,
+        // The credit agreement this row's group is held under, where the agent prints a reference.
+        // Last in the row on purpose: it is the newest column, and a feed written before it existed
+        // still loads and still groups by its key exactly as it did.
+        String agreementRef
 ) {}

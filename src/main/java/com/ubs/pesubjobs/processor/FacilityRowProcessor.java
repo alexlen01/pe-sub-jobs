@@ -38,7 +38,10 @@ public class FacilityRowProcessor implements ItemProcessor<FacilityRow, Processe
                 parseDate(item.collateralDate()),
                 blankToNull(item.umbrellaName()),
                 blankToNull(item.umbrellaKey()),
-                parseBoolean(item.umbrellaCrossCollateralized())
+                parseBoolean(item.umbrellaCrossCollateralized()),
+                blankToNull(item.trancheType()),
+                blankToNull(item.trancheOf()),
+                blankToNull(item.agreementRef())
         );
     }
 

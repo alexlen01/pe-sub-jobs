@@ -4,6 +4,7 @@ import com.ubs.pesubjobs.config.IngestProperties;
 import com.ubs.pesubjobs.model.LpFacilitySeedRow;
 import com.ubs.pesubjobs.model.ProcessedFacility;
 import com.ubs.pesubjobs.model.ProcessedLpMaster;
+import com.ubs.pesubjobs.model.ProcessedUmbrella;
 import com.ubs.pesubjobs.security.JobsSecurityProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,6 +46,18 @@ public class PeSubApiClient {
 
     public ApiIngestSummary ingestFacilities(List<? extends ProcessedFacility> rows) {
         return post("/api/facilities/ingest", rows);
+    }
+
+    /**
+     * The group layer, posted ahead of the facilities that name it — see the umbrella ingest job.
+     *
+     * <p>Posted to the master-agreement route, which is what the group has always been: a credit
+     * agreement several funds borrow under. The API still answers on {@code /api/umbrellas} as a
+     * deprecated alias, so a jobs build deployed before this change keeps loading — the two paths
+     * are one handler, so neither can drift from the other.
+     */
+    public ApiIngestSummary ingestUmbrellas(List<? extends ProcessedUmbrella> rows) {
+        return post("/api/master-agreements/ingest", rows);
     }
 
     public ApiIngestSummary ingestLpMaster(List<? extends ProcessedLpMaster> rows) {

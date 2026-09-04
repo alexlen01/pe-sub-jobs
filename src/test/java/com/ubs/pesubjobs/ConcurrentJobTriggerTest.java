@@ -110,8 +110,12 @@ class ConcurrentJobTriggerTest extends IntegrationTestBase {
         when(apiClient.ingestFacilities(anyList())).thenReturn(new ApiIngestSummary(1, 0, 0));
 
         jobController.trigger("facility-ingest", "facilities.csv", CALLER);
-        // Distinct run parameters, so the second call is a fresh run rather than a replay.
-        Thread.sleep(5);
+        // No wait between the two triggers. The runId is a millisecond clock reading, so a pause
+        // here would be guarding against the second run being rejected as a replay of the first —
+        // but ResourcelessBatchConfig runs Batch on the in-memory ResourcelessJobRepository, which
+        // keeps no instance history to match a replay against. Sleeping for a distinct millisecond
+        // guarded nothing and made the test depend on the platform's clock granularity, which on
+        // Windows can exceed the pause.
         ResponseEntity<?> second = jobController.trigger("facility-ingest", "facilities.csv", CALLER);
 
         assertThat(second.getStatusCode().is2xxSuccessful()).isTrue();

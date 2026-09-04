@@ -1,5 +1,24 @@
 ﻿server:
-  port: ${PORT}
+  port: ${PORT:3003}
+
+management:
+  server:
+    port: ${MANAGEMENT_PORT:9003}
+  endpoints:
+    web:
+      base-path: /manage
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+      group:
+        liveness:
+          include: livenessState
+        readiness:
+          include: readinessState,peSubApi
 
 # No datasource: pe-sub-jobs is DB-less. All feed writes go through pe-sub-api's SERVICE
 # endpoints (pe-sub-api owns the schema), and Spring Batch runs on an in-memory
@@ -23,6 +42,8 @@ ingest:
   # Launch the seed jobs on application startup. Disable (e.g. in tests, or when pe-sub-api
   # is not yet up) to skip them without removing the on-demand /jobs endpoints.
   run-on-startup: ${INGEST_RUN_ON_STARTUP:true}
+  # The group layer, loaded ahead of the facilities that name it.
+  umbrella-file: ${UMBRELLA_INGEST_FILE:data/out/umbrellas.csv}
   facility-file: ${FACILITY_INGEST_FILE:data/out/facilities.csv}
   lp-master-file: ${LP_MASTER_INGEST_FILE:data/out/lp_master.csv}
   lp-facility-seeds-file: ${LP_FACILITY_SEEDS_FILE:data/out/lp_facility_seeds.csv}

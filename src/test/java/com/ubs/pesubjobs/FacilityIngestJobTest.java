@@ -130,6 +130,33 @@ class FacilityIngestJobTest extends IntegrationTestBase {
     }
 
     @Test
+    void carriesTheTrancheDeclarationTheFeedStates() throws Exception {
+        // The sleeve relationship, stated by the feed rather than recovered downstream by stripping
+        // a "(Committed)" suffix off the name. A suffix match finds only the names someone wrote a
+        // pattern for; the second row here — a delayed-draw line named nothing like its parent — is
+        // invisible to one, and its share of the borrowing base would be counted as a facility of
+        // its own. The type is passed through as written, including a spelling the platform does not
+        // hold, because a bad value has to arrive intact to be seen and fixed at source.
+        JobExecution execution = runFeed("""
+                "agent_bank","name","account_number","loan_amount","maturity_date","bank_status","bank_status_date","ubs_participation","collateral_date","umbrella_name","umbrella_key","cross_collateralized","tranche_type","tranche_of"
+                "Bank of America","Ares Direct Lending (Committed)","5VZ1001","60000000","2028-01-12","Active","2026-05-13","","2026-04-28","Ares Direct Lending","Ares Direct Lending","true","COMMITTED","Ares Direct Lending"
+                "Bank of America","Ares Capex Line","5VZ1002","40000000","2028-01-12","Active","2026-05-13","","2026-04-28","Ares Direct Lending","Ares Direct Lending","true","DELAYED_DRAW","Ares Direct Lending"
+                "Bank of America","Carlyle Buyout Umbrella","5VZ8873","100000000","2028-01-12","Active","2026-05-13","","2026-04-28","Umbrella 5VZ8873","5VZ8873","","",""
+                """);
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
+        List<ProcessedFacility> rows = capturedFacilityRows();
+        assertThat(rows)
+                .extracting((ProcessedFacility f) -> f.trancheType())
+                // A fund that is not a sleeve declares nothing, and blank arrives as null rather
+                // than as an empty tranche type.
+                .containsExactly("COMMITTED", "DELAYED_DRAW", null);
+        assertThat(rows)
+                .extracting((ProcessedFacility f) -> f.trancheOf())
+                .containsExactly("Ares Direct Lending", "Ares Direct Lending", null);
+    }
+
+    @Test
     void feedWrittenBeforeTheUmbrellaColumnExisted_stillLoads() throws Exception {
         // The umbrella columns are last and the tokenizer is lenient, so a nine-column feed loads
         // and simply states no umbrella — an older feed file is never a failed run.
@@ -145,6 +172,40 @@ class FacilityIngestJobTest extends IntegrationTestBase {
         assertThat(rows.getFirst().umbrellaName()).isNull();
         assertThat(rows.getFirst().umbrellaKey()).isNull();
         assertThat(rows.getFirst().umbrellaCrossCollateralized()).isNull();
+        // Same for the tranche columns, which are last of all: a feed written before they existed
+        // simply states no tranche, and the API leaves any declaration it already holds alone.
+        assertThat(rows.getFirst().trancheType()).isNull();
+        assertThat(rows.getFirst().trancheOf()).isNull();
+        // And for the agreement reference, newest of all: silence, so the API groups the row by its
+        // key exactly as it did before the column existed.
+        assertThat(rows.getFirst().agreementRef()).isNull();
+    }
+
+    @Test
+    void carriesTheAgreementReferenceTheFeedStates() throws Exception {
+        // Two funds under one credit agreement, administered on two different accounts. Grouped by
+        // account number they are two groups; grouped by the agreement they are what they are — one
+        // agreement with two borrowers. The reference is what the API resolves on first, so an
+        // account re-papered between runs no longer splits the group.
+        JobExecution execution = runFeed("""
+                "agent_bank","name","account_number","loan_amount","maturity_date","bank_status","bank_status_date","ubs_participation","collateral_date","umbrella_name","umbrella_key","cross_collateralized","tranche_type","tranche_of","agreement_ref"
+                "Wells Fargo","Carlyle Buyout V","5VZ8873","100000000","2028-01-12","Active","2026-05-13","","2026-04-28","Carlyle Buyout Umbrella","5VZ8873","","","","CA-2021-4471"
+                "Wells Fargo","Carlyle Buyout VI","5VZ9001","150000000","2028-01-12","Active","2026-05-13","","2026-04-28","Carlyle Buyout Umbrella","5VZ9001","","","","CA-2021-4471"
+                "Wells Fargo","HIG LBO IV","5VX1796","75000000","2028-01-12","Active","2026-05-13","","2026-04-28","","","","",""
+                """);
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
+        List<ProcessedFacility> rows = capturedFacilityRows();
+        assertThat(rows)
+                .extracting((ProcessedFacility f) -> f.agreementRef())
+                // A fund borrowing alone states no agreement, and blank arrives as null rather than
+                // as an empty reference — which would be a reference, and a shared one at that.
+                .containsExactly("CA-2021-4471", "CA-2021-4471", null);
+        // The keys still differ, which is the whole point: what used to split these two is still
+        // in the row, and no longer decides the grouping.
+        assertThat(rows)
+                .extracting((ProcessedFacility f) -> f.umbrellaKey())
+                .containsExactly("5VZ8873", "5VZ9001", null);
     }
 
     private List<ProcessedFacility> capturedFacilityRows() {

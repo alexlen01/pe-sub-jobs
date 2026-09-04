@@ -32,6 +32,14 @@ Requests without the `SERVICE` role fail with `403`.
 
 ## Jobs
 
+### `umbrella-ingest`
+
+- Endpoint: `POST /jobs/umbrella-ingest`
+- Feed target: `POST /api/umbrellas/ingest`
+- Upserts by group key: the account number where the members share one, the credit agreement where
+  they hold one each. A group renamed by an analyst keeps that name across re-runs.
+- Runs before `facility-ingest`, which names the group each fund belongs to.
+
 ### `facility-ingest`
 
 - Endpoint: `POST /jobs/facility-ingest`
@@ -61,9 +69,10 @@ Requests without the `SERVICE` role fail with `403`.
 - It runs startup feeds only when the API is confirmed empty.
 - `INGEST_RUN_ON_STARTUP=false` skips startup ingestion.
 - Jobs run in this order:
-  1. `facility-ingest`
-  2. `lp-master-ingest`
-  3. `lp-records-seed`
+  1. `umbrella-ingest` (skipped when no feed file is present)
+  2. `facility-ingest`
+  3. `lp-master-ingest`
+  4. `lp-records-seed`
 
 ## File selection
 
@@ -78,6 +87,7 @@ Use `?file=<name>` on a job endpoint to load a file from `INGEST_IMPORT_ROOT`.
 - `PORT` — default `3003`
 - `LOG_PATH` — log directory
 - `PE_SUB_API_URL` — API base URL, default `http://localhost:3001`
+- `UMBRELLA_INGEST_FILE` — startup umbrella (group) input
 - `FACILITY_INGEST_FILE` — startup facility input
 - `LP_MASTER_INGEST_FILE` — startup LP Master input
 - `LP_FACILITY_SEEDS_FILE` — startup LP seed input

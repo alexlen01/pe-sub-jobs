@@ -53,6 +53,7 @@ public class JobController {
     private final JobOperator jobOperator;
     private final IngestProperties ingestProperties;
     private final ImportFileResolver importFileResolver;
+    private final Job umbrellaIngestJob;
     private final Job facilityIngestJob;
     private final Job lpMasterIngestJob;
     private final Job lpRecordsSeedJob;
@@ -61,6 +62,7 @@ public class JobController {
     public JobController(JobOperator jobOperator,
                          IngestProperties ingestProperties,
                          ImportFileResolver importFileResolver,
+                         @Qualifier("umbrellaIngestJob")      Job umbrellaIngestJob,
                          @Qualifier("facilityIngestJob")      Job facilityIngestJob,
                          @Qualifier("lpMasterIngestJob")      Job lpMasterIngestJob,
                          @Qualifier("lpRecordsSeedJob")       Job lpRecordsSeedJob,
@@ -68,6 +70,7 @@ public class JobController {
         this.jobOperator           = jobOperator;
         this.ingestProperties      = ingestProperties;
         this.importFileResolver    = importFileResolver;
+        this.umbrellaIngestJob     = umbrellaIngestJob;
         this.facilityIngestJob     = facilityIngestJob;
         this.lpMasterIngestJob     = lpMasterIngestJob;
         this.lpRecordsSeedJob      = lpRecordsSeedJob;
@@ -81,6 +84,7 @@ public class JobController {
             Authentication authentication) throws Exception {
 
         Job job = switch (jobName) {
+            case "umbrella-ingest"        -> umbrellaIngestJob;
             case "facility-ingest"        -> facilityIngestJob;
             case "lp-master-ingest"       -> lpMasterIngestJob;
             case "lp-records-seed"        -> lpRecordsSeedJob;
@@ -151,6 +155,7 @@ public class JobController {
             return importFileResolver.resolve(requestedFile).toString();
         }
         String configured = switch (jobName) {
+            case "umbrella-ingest"        -> ingestProperties.umbrellaFile();
             case "facility-ingest"        -> ingestProperties.facilityFile();
             case "lp-master-ingest"       -> ingestProperties.lpMasterFile();
             case "lp-records-seed"        -> ingestProperties.lpFacilitySeedsFile();

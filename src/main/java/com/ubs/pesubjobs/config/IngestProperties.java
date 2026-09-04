@@ -8,6 +8,10 @@ import java.time.Duration;
 @ConfigurationProperties(prefix = "ingest")
 public record IngestProperties(
         String facilityFile,
+        // The group layer above the facilities. Loaded before the facility feed so a fund naming
+        // its group finds it already onboarded under the name the agent printed. Blank/absent →
+        // the startup runner skips it, and facilities fall back to grouping by account number.
+        String umbrellaFile,
         String lpMasterFile,
         String lpFacilitySeedsFile,
         // Optional classification concentration-limit defaults feed. Blank/absent → the

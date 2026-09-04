@@ -4,6 +4,8 @@ import com.ubs.pesubjobs.client.PeSubApiClient;
 import com.ubs.pesubjobs.config.IngestProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.mockito.InOrder;
 import org.springframework.batch.core.job.Job;
 import org.springframework.batch.core.job.JobExecution;
 import org.springframework.batch.core.job.parameters.JobParameters;
@@ -11,11 +13,15 @@ import org.springframework.batch.core.launch.JobOperator;
 import org.springframework.batch.infrastructure.item.ExecutionContext;
 import org.springframework.boot.DefaultApplicationArguments;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.OptionalLong;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -30,21 +36,24 @@ class JobStartupRunnerTest {
 
     private final JobOperator jobOperator = mock(JobOperator.class);
     private final PeSubApiClient apiClient = mock(PeSubApiClient.class);
+    private final Job umbrellaIngestJob = mock(Job.class);
     private final Job facilityIngestJob = mock(Job.class);
     private final Job lpMasterIngestJob = mock(Job.class);
     private final Job lpRecordsSeedJob = mock(Job.class);
     private final Job clsConcLimitIngestJob = mock(Job.class);
 
+    @TempDir Path feedDir;
+
     private JobStartupRunner runner;
+    private Path umbrellaFeed;
 
     @BeforeEach
     void setUp() throws Exception {
-        IngestProperties props = new IngestProperties(
-                "facilities.csv", "lp-master.csv", "lp-facility-seeds.csv", null,
-                "http://localhost:3001", "data/out", 10,
-                Duration.ofSeconds(1), Duration.ofMillis(250), true);
-        runner = new JobStartupRunner(jobOperator, facilityIngestJob, lpMasterIngestJob,
-                lpRecordsSeedJob, clsConcLimitIngestJob, props, apiClient);
+        // Written, because the runner only launches the group feed when the file is actually there:
+        // a feed set extracted before umbrellas.csv existed must not turn startup into a failure.
+        umbrellaFeed = feedDir.resolve("umbrellas.csv");
+        Files.writeString(umbrellaFeed, "key,name\n");
+        runner = newRunner(umbrellaFeed.toString());
 
         when(apiClient.isApiReady()).thenReturn(true);
         JobExecution execution = mock(JobExecution.class);
@@ -52,6 +61,15 @@ class JobStartupRunnerTest {
         // always carries a context, so the mock has to as well.
         when(execution.getExecutionContext()).thenReturn(new ExecutionContext());
         when(jobOperator.start(any(Job.class), any(JobParameters.class))).thenReturn(execution);
+    }
+
+    private JobStartupRunner newRunner(String umbrellaFile) {
+        IngestProperties props = new IngestProperties(
+                "facilities.csv", umbrellaFile, "lp-master.csv", "lp-facility-seeds.csv", null,
+                "http://localhost:3001", "data/out", 10,
+                Duration.ofSeconds(1), Duration.ofMillis(250), true);
+        return new JobStartupRunner(jobOperator, umbrellaIngestJob, facilityIngestJob,
+                lpMasterIngestJob, lpRecordsSeedJob, clsConcLimitIngestJob, props, apiClient);
     }
 
     private void counts(OptionalLong facilities, OptionalLong lpMaster, OptionalLong lpRecords) {
@@ -71,6 +89,33 @@ class JobStartupRunnerTest {
         run();
 
         verify(jobOperator, atLeastOnce()).start(any(Job.class), any(JobParameters.class));
+    }
+
+    @Test
+    void groupFeedRunsBeforeTheFacilitiesThatNameIt() throws Exception {
+        // A facility names its umbrella on its own row. Loaded the other way round, the first
+        // member through creates the group under a name minted from an account number, and the
+        // name the agent printed on the credit agreement is lost for the rest of the run.
+        counts(OptionalLong.of(0), OptionalLong.of(0), OptionalLong.of(0));
+
+        run();
+
+        InOrder order = inOrder(jobOperator);
+        order.verify(jobOperator).start(eq(umbrellaIngestJob), any(JobParameters.class));
+        order.verify(jobOperator).start(eq(facilityIngestJob), any(JobParameters.class));
+    }
+
+    @Test
+    void absentGroupFeed_isSkippedAndTheOtherFeedsStillRun() throws Exception {
+        // A feed set extracted before umbrellas.csv existed. The group layer is simply not stated;
+        // that is not a reason to leave the platform unseeded.
+        runner = newRunner(feedDir.resolve("not-written.csv").toString());
+        counts(OptionalLong.of(0), OptionalLong.of(0), OptionalLong.of(0));
+
+        run();
+
+        verify(jobOperator, never()).start(eq(umbrellaIngestJob), any(JobParameters.class));
+        verify(jobOperator).start(eq(facilityIngestJob), any(JobParameters.class));
     }
 
     @Test

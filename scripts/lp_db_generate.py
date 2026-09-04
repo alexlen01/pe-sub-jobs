@@ -8,10 +8,12 @@ variations; the report states the facilities those positions sit on.
 Both are rendered from ONE facility roster (ABS_ROSTER), which is why they agree the way the real
 pair does: every account number, borrower name and loan amount in the export is the one the report
 prints for that facility, the export's BB date falls inside the facility's own reported life, and
-each facility's LP pool is apportioned from the loan amount printed beside it. The one deliberate
-disagreement is ORPHAN_ACCOUNTS - positions on accounts the report omits, which is what keeps the
-ingestion's "Unknown agent" path exercised. Everything else the export writes - about 99% of its
-records at the default settings - joins to a facility the report prints.
+each facility's LP pool is apportioned from the loan amount printed beside it. The two deliberate
+disagreements are ORPHAN_ACCOUNTS - positions on accounts the report omits, which is what keeps the
+ingestion's "Unknown agent" path exercised - and GROUP_UMBRELLAS, an account the report prints ONCE
+under the name of the obligor that signs the credit agreement, with the funds borrowing beneath it
+appearing in the export alone. Everything else the export writes - about 99% of its records at the
+default settings - joins to a facility the report prints.
 
 The roster itself is MINTED rather than transcribed: build_roster() draws the agents, borrowers,
 accounts, amounts and dates from ROSTER_SEED, so the sample states no real institution's book of
@@ -50,6 +52,7 @@ import math
 import random
 import re
 from collections import Counter
+from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
@@ -91,6 +94,13 @@ DEFAULT_LOAN_AMOUNT = 140_000_000   # orphan accounts: the summary report does n
 # account. One fund on several accounts, which is the shape the printed report's own orphans take:
 # separate credit agreements that must never be grouped as an umbrella.
 ORPHAN_COUNT = 2
+# The umbrella as the agent actually prints it: ONE row for the account, naming the obligor that
+# signs the credit agreement, with the funds that borrow beneath it named only by the export. The
+# real file states 5VZ8873 as "Carlyle Buyout Umbrella" and the export puts six Carlyle funds on it.
+# This is a different shape from _unit_umbrella, which prints every member, and it is the shape that
+# decides whether a report row with no fund to match is read as the GROUP it names or handed to
+# whichever member the export happens to list first.
+GROUP_UMBRELLA_MEMBERS = 6
 AS_OF = date(2026, 6, 25)       # the sample's as-of date: no BB run is dated after it
 # How far after a facility's reported FacilityStatusDate its most recent BB run may fall. The
 # export's BBDate is not a free-floating date: a borrowing base is certified against a LIVE
@@ -116,6 +126,21 @@ SRC_HEADERS = [
     "Agent Excess Concentration", "UBS Excess Concentration", "Agent Borrowing Base",
     "UBS Borrowing Base", "Notes", "BBDate"
 ]
+
+# ── the multi-tranche declaration ────────────────────────────────────────────────────────────
+# The export format is expected to gain two columns so a multi-tranche facility can STATE that it
+# is one, instead of leaving the platform to recover the relationship by stripping a
+# "(Committed)"/"(Uncommitted)" suffix off a name. A suffix match finds exactly the sleeve names
+# someone thought to write the pattern for, and silently misses a currency tranche, a term sleeve
+# or an accordion; a stated parent finds all of them.
+#
+# True writes the columns, which is the shape the extract prefers and the shape to develop
+# against. False writes the file exactly as every export to date has arrived, with the sleeve
+# suffix as the only evidence - which is the case the extract's legacy reading exists for, and
+# which has to keep working for as long as the archive does. Flip it to exercise the other path.
+EXPORT_STATES_TRANCHES = True
+TRANCHE_SRC_HEADERS = ["Tranche", "Tranche Of"]
+TRANCHE_SRC_COLS = ["Tranche", "TrancheOf"]
 
 # Agent Bank Summary column layout, which the report header must match exactly. Index 4 is an
 # unnamed spacer holding the report's subtotal amounts.
@@ -189,6 +214,9 @@ ABS_SUBTOTAL_FORMULA = {
 # comes out without them.
 #   * one account carrying several borrowers is an umbrella subscription facility - related funds,
 #     feeders and SPVs borrowing under one credit agreement;
+#   * ONE row printed for an account whose export carries several funds is the same structure
+#     reported at group level: the row names the obligor that signed the credit agreement, not any
+#     borrower, and the funds beneath it are named by the export alone (see GROUP_UMBRELLAS);
 #   * one borrower printed under two accounts is two separate facilities, not a duplicate, and is
 #     never grouped as an umbrella;
 #   * the same (account, borrower) printed twice is a reprint, and collapses to ONE facility - it is
@@ -499,6 +527,52 @@ def _unit_umbrella(rng: random.Random, accts: set[str], names: set[str], members
             for suffix in rng.sample(UMBRELLA_MEMBER_SUFFIXES, members)]
 
 
+@dataclass(frozen=True)
+class GroupUmbrella:
+    """An umbrella the report prints at GROUP level: the obligor's row, and the funds beneath it.
+
+    `obligor` is printed by the report and is NOT a facility - it has no LP roster of its own, and
+    the export never names it. `members` are facilities on the same account and are named by the
+    export alone. `loan_amount` is the whole agreement's line, as printed; each member carries its
+    own share of it."""
+    account: str
+    obligor: str
+    loan_amount: int
+    maturity: str
+    status_date: str
+    members: tuple[tuple[str, int], ...]   # (fund name, its share of the line)
+
+
+def _unit_group_umbrella(rng: random.Random, accts: set[str], names: set[str],
+                         members: int) -> tuple[list[tuple], GroupUmbrella]:
+    """(the report's one row, the group it stands for).
+
+    The agent reports the CREDIT AGREEMENT here, not the funds: one row, one account, the whole
+    line, named for the obligor that signed it. The funds that draw on it reach the platform only
+    through the export, which is why the report row has no fund name to match and why handing it to
+    a member is a data loss rather than a near miss - the member takes the agreement's name and its
+    entire line, and its siblings, being unprinted, land as Unknown/Inactive placeholders.
+
+    The line is split across the members rather than repeated, so the funds' positions still
+    apportion out of the amount the report prints for the account."""
+    acct = _mint_account(rng, accts)
+    sponsor = _mint_sponsor(rng)
+    strategy = rng.choice(FUND_STRATEGIES)
+    maturity, status_date = _facility_dates(rng)
+    loan = _loan_amount(rng)
+    obligor = _mint_name(rng, names, sponsor=sponsor, strategy=f"{strategy} Umbrella", damage=False)
+
+    weights = [rng.uniform(0.5, 2.0) for _ in range(members)]
+    total = sum(weights)
+    shares = [max(1_000_000, int(loan * w / total)) for w in weights]
+    funds = tuple(
+        (_mint_name(rng, names, sponsor=sponsor, strategy=f"{strategy} {suffix}", damage=False),
+         share)
+        for suffix, share in zip(rng.sample(UMBRELLA_MEMBER_SUFFIXES, members), shares))
+    return ([_facility_row(obligor, acct, loan, maturity, status_date)],
+            GroupUmbrella(acct, obligor, loan, maturity, status_date, funds))
+
+
 def _unit_split(rng: random.Random, accts: set[str], names: set[str]) -> list[tuple]:
     """One borrower financed under TWO accounts: two credit agreements, two facilities, one name.
 
@@ -546,8 +620,8 @@ def _partition(rng: random.Random, units: int, groups: int) -> list[int]:
     return counts
 
 
-def build_roster() -> tuple[list[tuple], list[tuple[str, str]]]:
-    """(ABS_ROSTER, ORPHAN_ACCOUNTS), minted from ROSTER_SEED.
+def build_roster() -> tuple[list[tuple], list[tuple[str, str]], list[GroupUmbrella]]:
+    """(ABS_ROSTER, ORPHAN_ACCOUNTS, GROUP_UMBRELLAS), minted from ROSTER_SEED.
 
     Facilities are built as UNITS rather than rows, because the structures that matter are
     multi-row: a tranche pair, an umbrella and a split borrower each have to reach the same agent
@@ -580,6 +654,12 @@ def build_roster() -> tuple[list[tuple], list[tuple[str, str]]]:
         members = 3 if umbrella_rows >= 3 and rng.random() < 0.4 else 2
         units.append(_unit_umbrella(rng, accts, names, members))
         umbrella_rows -= members
+    # Floored at one per roster rather than drawn to a share: it is a single printed row, so a rate
+    # would round it away on most populations, and a roster without it renders and extracts
+    # perfectly while quietly no longer proving that a report row naming a group is read as one.
+    group_rows, group = _unit_group_umbrella(rng, accts, names, GROUP_UMBRELLA_MEMBERS)
+    units.append(group_rows)
+    umbrella_groups = [group]
     units += [_unit_plain(rng, accts, names)
               for _ in range(max(0, ROSTER_FACILITIES - sum(len(u) for u in units)))]
 
@@ -620,7 +700,7 @@ def build_roster() -> tuple[list[tuple], list[tuple[str, str]]]:
     # collide with a printed facility and quietly stop being an orphan.
     orphan_name = _mint_name(rng, names, damage=False)
     orphans = [(_mint_account(rng, accts), orphan_name) for _ in range(ORPHAN_COUNT)]
-    return roster, orphans
+    return roster, orphans, umbrella_groups
 
 
 # Internal keys for the same columns, in the same order. Mirrors lp_db_extract.SRC_COLS so the
@@ -1294,10 +1374,18 @@ def tranche_of(fund_name: str) -> str | None:
     return m.group(1).capitalize() if m else None
 
 
+def tranche_parent_name(fund_name: str) -> str:
+    """The facility a sleeve is a sleeve OF, spelt as the file spells it.
+
+    This is what the export's `Tranche Of` column states. Unlike tranche_base_name it is not
+    casefolded, because it is read by a person as well as matched by a machine."""
+    return TRANCHE_SUFFIX_RE.sub("", _as_str(fund_name)).strip()
+
+
 def tranche_base_name(fund_name: str) -> str:
     """The fund name with its tranche suffix stripped, casefolded - the key the sleeves of one
     Credit Agreement share and nothing else does."""
-    return TRANCHE_SUFFIX_RE.sub("", _as_str(fund_name)).strip().casefold()
+    return tranche_parent_name(fund_name).casefold()
 
 
 def tranche_groups(facilities: list[tuple]) -> tuple[dict, list]:
@@ -1348,7 +1436,10 @@ def agent_terms(agent_cat: str, fund_name: str) -> tuple[float, float]:
 # borrower uniqueness on _norm() - the extract's own matcher, so that two names the platform would
 # treat as one facility can never both be printed - and _norm is defined further down this file than
 # the roster's constants are. Everything below reads ABS_ROSTER as the fixed model of the run.
-ABS_ROSTER, ORPHAN_ACCOUNTS = build_roster()
+ABS_ROSTER, ORPHAN_ACCOUNTS, GROUP_UMBRELLAS = build_roster()
+# The obligor rows: printed by the report, and facilities in neither file. Held as a set because
+# every pass that reads ABS_ROSTER as the export's facility list has to step over them.
+GROUP_OBLIGORS = {(g.account, _norm(g.obligor)) for g in GROUP_UMBRELLAS}
 
 
 def load_facilities() -> list[tuple[str, str, int, str | None, str | None]]:
@@ -1380,8 +1471,18 @@ def load_facilities() -> list[tuple[str, str, int, str | None, str | None]]:
         for name, acct, loan, maturity, _status, status_date in rows:
             if not name or not acct or (acct, _norm(name)) in seen:
                 continue
+            # An obligor row names the credit agreement, not a borrower: the funds that draw on it
+            # are the facilities, and they are added below. Placing positions on the obligor too
+            # would double the account's collateral and make the group a seventh fund.
+            if (acct, _norm(name)) in GROUP_OBLIGORS:
+                continue
             seen.add((acct, _norm(name)))
             out.append((acct, name, int(loan) or DEFAULT_LOAN_AMOUNT, maturity, status_date))
+    # The member funds of a group-level umbrella: real facilities on a printed account, each with
+    # its own LP roster and its own share of the printed line, and named by the export alone.
+    for group in GROUP_UMBRELLAS:
+        for fund, share in group.members:
+            out.append((group.account, fund, share, group.maturity, group.status_date))
     # The orphans are the sample's one deliberate disagreement between the two files: positions on
     # accounts the report does not print, which is what leaves the ingestion's "Unknown agent"
     # placeholder path reachable. They are facilities in every other respect.
@@ -1452,6 +1553,34 @@ def validate_roster() -> None:
     if not any(len(funds) > 1 for funds in funds_per_account.values()):
         problems.append("no account carries more than one borrower - the roster states no umbrella "
                         "subscription facility, so that path is unexercised")
+
+    # The group-level umbrella. Its whole point is that the report row has NO fund to match: the
+    # obligor must be printed, must be alone on its account, and must not be a facility in the
+    # export - any of those failing turns it back into an ordinary umbrella and stops it proving
+    # that an unmatched row on a multi-fund account is read as the group it names.
+    if not GROUP_UMBRELLAS:
+        problems.append("the roster states no group-level umbrella, so nothing proves an Agent Bank "
+                        "Summary row naming an obligor rather than a fund is read as a group")
+    for group in GROUP_UMBRELLAS:
+        if (group.account, _norm(group.obligor)) not in printed:
+            problems.append(f"group umbrella {group.obligor!r} ({group.account}) is not printed by "
+                            "the report, so no row states the agreement at all")
+        if len(funds_per_account.get(group.account, ())) != 1:
+            problems.append(f"account {group.account} prints "
+                            f"{len(funds_per_account.get(group.account, ()))} borrowers - a "
+                            "group-level umbrella is printed once, as the obligor")
+        if len(group.members) < 2:
+            problems.append(f"group umbrella {group.obligor!r} states {len(group.members)} member "
+                            "fund(s) - one fund on an account is an ordinary rename, not a group")
+        for fund, share in group.members:
+            if (group.account, _norm(fund)) in printed:
+                problems.append(f"member fund {fund!r} ({group.account}) is printed by the report, "
+                                "so its group's row would match it and never read as a group")
+            if share <= 0:
+                problems.append(f"member fund {fund!r} ({group.account}) states share {share}")
+        if sum(share for _f, share in group.members) > group.loan_amount:
+            problems.append(f"group umbrella {group.obligor!r} allocates more to its members than "
+                            "the line the report prints for the account")
     if not any(tranche_of(name) for _a, _s, rows in ABS_ROSTER for name, *_ in rows):
         problems.append("the roster states no '(Committed)' / '(Uncommitted)' pair, so the tranche "
                         "mirror pass has nothing to mirror")
@@ -1592,6 +1721,10 @@ def verify_bbdates_within_facility_life(bbdates: dict[tuple[str, str], str]) -> 
     lives = {(acct, name): (maturity, status_date)
              for _a, _s, rows in ABS_ROSTER
              for name, acct, _loan, maturity, _status, status_date in rows}
+    # A member of a group-level umbrella is unprinted but not undated: the agreement's own life is
+    # the window its BB run is certified inside, so it is held to that rather than skipped.
+    lives.update({(g.account, fund): (g.maturity, g.status_date)
+                  for g in GROUP_UMBRELLAS for fund, _share in g.members})
     problems = []
     for fk, bbdate in bbdates.items():
         life = lives.get(fk)
@@ -1904,8 +2037,12 @@ def verify_export_against_report(export_rows: list[dict]) -> None:
     exercises DELIBERATELY through the orphans and must not acquire by accident."""
     printed = {(acct, _norm(name)) for _a, _s, rows in ABS_ROSTER for name, acct, *_ in rows}
     orphans = {(acct, _norm(fund)) for acct, fund in ORPHAN_ACCOUNTS}
+    # A group-level umbrella's members are accounted for by the obligor row printed over them: the
+    # report states the account and the agreement, and the funds beneath it are the export's to name.
+    members = {(g.account, _norm(fund)) for g in GROUP_UMBRELLAS for fund, _share in g.members}
     unaccounted = sorted({(row["AccountID"], row["FndName"]) for row in export_rows
-                          if (row["AccountID"], _norm(row["FndName"])) not in printed | orphans})
+                          if (row["AccountID"], _norm(row["FndName"]))
+                          not in printed | orphans | members})
     if unaccounted:
         listed = "\n  ".join(f"{fund!r} (account {acct})" for acct, fund in unaccounted[:25])
         raise SystemExit(f"the export places positions on {len(unaccounted)} facility(ies) the "
@@ -2087,6 +2224,18 @@ def main() -> int:
         r["agent_borrowing_base"], r["ubs_borrowing_base"], "", r["bbdate"],
     ])) for r in positions]
 
+    # The tranche declaration, on every row of a sleeve's roster. The columns are per LP in the
+    # file and per FACILITY in meaning - which is why the extract takes a facility's declaration
+    # from the first of its rows that carries one rather than from the first row outright.
+    #
+    # Computed from the CLEAN fund name, before the chaos monkey runs. That is the point of the
+    # column: the declaration is a stated fact and stays true when the name it was once inferred
+    # from drifts, where a suffix reading would lose the sleeve the moment someone retyped it.
+    for r, row in zip(positions, export_rows):
+        sleeve = tranche_of(r["fund"])
+        row["Tranche"] = sleeve or ""
+        row["TrancheOf"] = tranche_parent_name(r["fund"]) if sleeve else ""
+
     # Prove the sample adds up while it is still clean; the chaos monkey may only degrade columns
     # this check does not depend on, or blank ones whose fallback restores the checked value.
     verify_reconciliation(export_rows)
@@ -2111,9 +2260,13 @@ def main() -> int:
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = SHEET_NAME
-    ws.append(SRC_HEADERS)          # the real file's header spellings, not the internal keys
+    # The real file's header spellings, not the internal keys. The tranche declaration is appended
+    # rather than inserted, because that is how a format gains a column without moving the ones a
+    # reader already resolves by position.
+    cols = SRC_COLS + (TRANCHE_SRC_COLS if EXPORT_STATES_TRANCHES else [])
+    ws.append(SRC_HEADERS + (TRANCHE_SRC_HEADERS if EXPORT_STATES_TRANCHES else []))
     for row in export_rows:
-        ws.append([row[c] for c in SRC_COLS])
+        ws.append([row[c] for c in cols])
     EXPORT_OUT.parent.mkdir(parents=True, exist_ok=True)
     wb.save(EXPORT_OUT)
 
@@ -2136,8 +2289,10 @@ def main() -> int:
     print(f"  distinct LPs (lp_master)  : {investor_count}")
     mirrored_sleeves = sum(len(s) for s in tranche_siblings.values())
     tranched = sum(1 for s in tranche_siblings.values() if s)
+    group_members = sum(len(g.members) for g in GROUP_UMBRELLAS)
     print(f"  facilities (incl orphans) : {len(per_fac)}  ({len(ORPHAN_ACCOUNTS)} orphan, "
-          f"{len(per_fac) - len(ORPHAN_ACCOUNTS)} printed by the report)")
+          f"{group_members} under a group-level umbrella, "
+          f"{len(per_fac) - len(ORPHAN_ACCOUNTS) - group_members} printed by the report)")
     print(f"  tranche sleeves mirrored  : {mirrored_sleeves} on {tranched} credit agreement(s)")
     # Reported rather than declared: the umbrellas are whatever the finished export turns out to
     # hold, seeded and inherited from the report alike, counted the same way the extract counts them.
@@ -2149,6 +2304,10 @@ def main() -> int:
     print(f"  umbrella accounts         : {len(umbrellas)} account(s) carrying {fund_count} funds")
     for acct, funds in umbrellas.items():
         print(f"    {acct:<12}: {', '.join(sorted(funds))}")
+    for group in GROUP_UMBRELLAS:
+        print(f"  group-level umbrella      : {group.account} is printed ONCE as "
+              f"{group.obligor!r} at ${group.loan_amount:,}; its "
+              f"{len(group.members)} funds are named by the export alone")
     print(f"  LPs/facility  min/med/max : {fac_sizes[0]} / {fac_sizes[len(fac_sizes)//2]} / {fac_sizes[-1]}")
     print(f"  avg repeats per LP        : {len(positions)/investor_count:.1f}")
     print(f"  LPs with agency ratings   : {rated_lps} ({rated_lps/investor_count:.0%})")

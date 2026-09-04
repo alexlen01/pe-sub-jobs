@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 r"""
-Read an LP DB Export workbook and AgentBankSummaryRpt.xlsx, then write the three CSV seed files
+Read an LP DB Export workbook and AgentBankSummaryRpt.xlsx, then write the four CSV seed files
 used by pe-sub-jobs:
     data/out/lp_master.csv
     data/out/lp_facility_seeds.csv
     data/out/facilities.csv
+    data/out/umbrellas.csv
 
 The LP input is the LP DB Export. Columns are matched by header, and common analyst entry
 variations are tolerated. A facility is identified by the (AccountID, FndName) pair.
@@ -60,6 +61,14 @@ SRC_COLS = [
     "AgentCL", "UBSCL",
     "PercentOfCommitments", "Called", "PercentOfUncalled", "CalledPercent",
     "AgentExcessConc", "UBSExcessConc", "AgentBB", "UBSBB", "Notes", "BBDate",
+    # The two columns that let a multi-tranche facility STATE that it is one, rather than leaving
+    # the platform to recover it from a naming habit. Both optional, so today's V2 workbook - which
+    # carries neither - parses unchanged and reads exactly as it does now.
+    "Tranche", "TrancheOf",
+    # The credit agreement's own reference. Optional for the same reason as the two above: no
+    # export written to date carries it, and a column that is not there states nothing about any
+    # row. Where it IS carried it is what the facility's group resolves by - see FACILITY_COLS.
+    "AgreementRef",
 ]
 
 # Agent Advance Rate is the one column allowed to be ABSENT rather than fatal: workbooks written
@@ -71,7 +80,13 @@ SRC_COLS = [
 # workbook written to the 30-column format predates them. Treating their absence as fatal would
 # reject the entire back catalogue - and the platform's own LP Records export, which still writes
 # the 30-column shape - to gain nothing: a column that is not there states nothing about any row.
-OPTIONAL_COLS = {"AgentAR", "Region", "InvestorType"}
+#
+# Tranche and TrancheOf are optional for a third reason: no export written to date carries either.
+# They are the columns the format is expected to gain for multi-tranche support, and reading them
+# now means the day one arrives it is used rather than ignored. Until then every workbook states
+# nothing about tranching and the legacy sleeve-suffix reading fills the gap (see
+# legacy_sleeve_reading).
+OPTIONAL_COLS = {"AgentAR", "Region", "InvestorType", "Tranche", "TrancheOf", "AgreementRef"}
 
 # Accepted header spellings per column. Matching runs through _norm(), which lowercases and
 # collapses every run of non-alphanumerics to one space - so it absorbs the format's own quirks
@@ -121,6 +136,23 @@ SRC_HEADERS = {
     "UBSBB":                ["UBS Borrowing Base", "UBSBB"],
     "Notes":                ["Notes"],
     "BBDate":               ["BBDate", "Collateral Date", "BB Date"],
+    # Which sleeve of a multi-tranche facility this row's facility is. The spellings cover what an
+    # agent's system is likely to call the field; the VALUES are normalised separately, by
+    # tranche_type(), because the vocabulary drifts far more than the header does.
+    "Tranche":              ["Tranche", "Tranche Type", "TrancheType", "Facility Tranche",
+                             "Sleeve", "Sleeve Type"],
+    # The facility the sleeve belongs to - the credit agreement's own facility, named once and
+    # shared by every sleeve of it. This is the reference that replaces matching a name suffix: a
+    # currency tranche, a term sleeve or an accordion states its parent here and groups correctly
+    # however it is named, which a suffix match cannot do.
+    "TrancheOf":            ["Tranche Of", "TrancheOf", "Parent Facility", "ParentFacility",
+                             "Facility", "Credit Agreement", "Facility Group"],
+    # The reference the credit agreement is administered under - a deal number, a CUSIP-like
+    # facility ID, whatever the agent prints over the agreement itself. Distinct from "Credit
+    # Agreement" above, which is a NAME and is read as the parent facility of a sleeve.
+    "AgreementRef":         ["Agreement Ref", "AgreementRef", "Agreement Reference",
+                             "Agreement ID", "AgreementID", "Deal ID", "DealID",
+                             "Facility ID", "FacilityID", "Credit Agreement Ref"],
 }
 
 # Columns the 2026-08-18 format dropped, kept here only so a stale workbook is diagnosed with a
@@ -213,6 +245,64 @@ FACILITY_COLS = [
     "agent_bank", "name", "account_number", "loan_amount", "maturity_date", "bank_status",
     "bank_status_date", "ubs_participation", "collateral_date", "umbrella_name",
     "umbrella_key", "cross_collateralized",
+    # ── the tranche declaration ──────────────────────────────────────────────────────────────
+    # Which sleeve of a multi-tranche facility this row is, and the facility it is a sleeve OF.
+    # Both blank on the ordinary facility, which is nearly every facility in the book.
+    #
+    # These two columns are the point of this phase. A multi-tranche facility is one borrower on
+    # one collateral pool, split by how much of the commitment is contractually firm, and the
+    # legacy feeds report each sleeve as a facility of its own because the agent certifies each
+    # separately. Until now the relationship between those rows was recovered downstream by
+    # stripping a "(Committed)"/"(Uncommitted)" suffix and comparing what was left - which finds
+    # exactly the two sleeve names anyone thought to write the pattern for, and silently misses a
+    # currency tranche, a term sleeve or an accordion.
+    #
+    # Stating it here moves the fact to where it is known and leaves nothing to infer. It is
+    # ADDITIVE: the columns are appended, so a reader written against the twelve-column feed is
+    # unaffected, and the cross_collateralized grouping this script already emits for a sleeve set
+    # is emitted exactly as before, so no figure the platform reports moves when this lands.
+    "tranche_type", "tranche_of",
+    # ── the agreement reference ──────────────────────────────────────────────────────────────
+    # What the agreement is administered under, where either file prints it. This is the column
+    # the group now resolves by, ahead of the account number, and it is here rather than only on
+    # the group feed because it is the facility row that says which agreement a facility is under.
+    #
+    # An account number is how a BANK administers an agreement: it can be re-papered, split across
+    # two systems after a merger, or reissued, and every one of those events used to split one
+    # credit agreement into two groups - each with its own borrowing base and the collateral
+    # counted twice. The reference does not move when the account does.
+    #
+    # ADDITIVE in the same way the tranche columns are: appended, never inserted, and blank on
+    # every file written to date - so a run over the legacy book groups by account exactly as
+    # before, and not one figure the platform reports moves when this lands. The new key takes
+    # effect only where a file states a reference.
+    "agreement_ref",
+]
+TRANCHE_TYPE_COL = FACILITY_COLS.index("tranche_type")
+TRANCHE_OF_COL = FACILITY_COLS.index("tranche_of")
+AGREEMENT_REF_COL = FACILITY_COLS.index("agreement_ref")
+# The group layer, fed separately from its members. A group is not a facility - it has no LP roster
+# and no borrowing base of its own - so stating it on the member rows would repeat one credit
+# agreement's terms once per fund and leave whichever row loaded last holding them.
+#
+# The columns are what the platform holds a group in, and no more. The agreement's maturity and its
+# standing are carried on the member facilities, which is where the platform records both and where
+# a borrowing base is certified against them; writing them here too would state one fact in two
+# places and leave a group that disagreed with its own members readable as either.
+UMBRELLA_COLS = [
+    "key", "name", "obligor_name", "agent_bank", "account_number", "loan_amount",
+    "cross_collateralized",
+    # ── the agreement's own identity and terms ───────────────────────────────────────────────
+    # agreement_ref is what the platform resolves the group by where it is stated, so a group
+    # survives its account being re-papered. The other three are terms of the agreement the report
+    # prints over a group and nowhere else: the entity that signed, the cap on one member's draw,
+    # and how the members answer for the debt (SEVERAL / JOINT_AND_SEVERAL / GUARANTEED).
+    #
+    # Blank means the file stated nothing, which the ingest reads as silence: it never clears a
+    # term an analyst recorded. A liability reading in particular is a legal position - it is
+    # passed through as printed and refused by the API if unrecognised, never folded onto a
+    # neighbouring value to make it fit.
+    "agreement_ref", "borrower_entity", "sub_limit", "liability_type",
 ]
 
 # One account number carrying MORE THAN ONE facility is an umbrella subscription facility: several
@@ -224,38 +314,134 @@ FACILITY_COLS = [
 # notice: the ingest reads the feed in chunks and never has the whole file in view, so it cannot
 # see that two facilities several hundred rows apart share an account. This script does.
 #
-# The name is minted from the account number because the account number is the only thing the two
-# source files actually say about the group. Neither states a group name, and no member's own
-# borrower name is the group's - a member is one fund under the umbrella, not the umbrella. The
-# ingest keys the umbrella on `umbrella_key` rather than on this name, so an analyst renaming it
-# to what the credit agreement calls it is safe and survives every later run.
+# The report prints an umbrella one of two ways, and they need different handling:
+#
+#   * one row per MEMBER fund, all on the shared account. Each row joins to its own fund by name,
+#     and the group itself is never named - so its name is minted from the account number, the only
+#     thing the two files then say about it.
+#   * one row for the GROUP, naming the obligor that signs the credit agreement - "Carlyle Buyout
+#     Umbrella" over an account the export carries six funds on. Here the report DOES state the
+#     group's name and terms, and the row is not a facility at all: it has no LP roster, and its
+#     loan amount is the whole agreement's, not any one fund's.
+#
+# The second shape is what a real report carries most often, and it is why an unmatched row on a
+# multi-fund account is never handed to a member (see upsert_facilities): doing so puts the group's
+# name and the group's loan amount onto one arbitrary fund and leaves its siblings orphaned.
+#
+# The ingest keys the umbrella on `umbrella_key` - the account number - rather than on the name, so
+# an analyst renaming it to what the credit agreement calls it is safe and survives every later run.
 UMBRELLA_NAME_PREFIX = "Umbrella "
 
-# The other shape of one credit agreement: a multi-tranche facility, reported as one sleeve per
-# tranche - "<fund> (Committed)" and "<fund> (Uncommitted)". The sleeves are the SAME borrower on
-# the SAME collateral, split by how much of the commitment is contractually firm, so each is
-# certified separately and the agent gives each its own account number.
+# ── The other shape of one credit agreement: a multi-tranche facility ─────────────────────────
 #
-# That is why they cannot be found the way an account umbrella is found: the sleeves of one facility
-# never share an account. They share a name, less the suffix, and that is what groups them here.
+# Reported as one sleeve per tranche, because the sleeves are the SAME borrower on the SAME
+# collateral, split by how much of the commitment is contractually firm - so the agent certifies
+# each separately and gives each its own account number. That is why they cannot be found the way
+# an account umbrella is found: the sleeves of one facility never share an account.
 #
 # A tranche set stands on ONE borrowing base by construction - one borrower, one LP roster, one
 # collateral pool - so unlike an account umbrella this script CAN state cross-collateralization
 # for it, and does. Without it the platform would report the same base once per sleeve and count
 # the collateral twice over.
-TRANCHE_SUFFIX_RE = re.compile(r"\s*\((committed|uncommitted)\)\s*$", re.I)
+#
+# WHAT IS DECLARED AND WHAT IS INFERRED. The relationship is now read from the feed's own
+# `Tranche` / `TrancheOf` columns wherever they are stated. Only where they are not does the
+# reading below apply, and its ONLY job is to fill those same two columns, so there is one
+# mechanism downstream instead of two: the grouping in assign_umbrellas reads the declaration and
+# nothing else. That is what retires the old suffix-driven grouping - the pattern no longer
+# decides anything, it supplies a default for a column the format is expected to carry.
+#
+# The pattern is kept rather than deleted because every workbook written to date names its sleeves
+# this way, and retention of the legacy book is a hard requirement: dropping the reading would
+# leave every historical sleeve set ungrouped and its one borrowing base counted once per sleeve -
+# the exact double count this line of work exists to remove.
+
+# Canonical tranche types, matching the platform's own vocabulary (tranches.tranche_type). The
+# spellings an agent's system uses for the same thing are folded onto them; anything unrecognised
+# is passed through upper-cased so it reaches the platform as a visible rejection rather than being
+# silently re-labelled as something the platform does handle.
+TRANCHE_TYPE_ALIASES = {
+    "committed": "COMMITTED", "committed tranche": "COMMITTED", "firm": "COMMITTED",
+    "uncommitted": "UNCOMMITTED", "uncommitted tranche": "UNCOMMITTED", "discretionary": "UNCOMMITTED",
+    "term": "TERM", "term loan": "TERM", "term tranche": "TERM",
+    "accordion": "ACCORDION", "incremental": "ACCORDION",
+    "delayed draw": "DELAYED_DRAW", "delayeddraw": "DELAYED_DRAW", "ddtl": "DELAYED_DRAW",
+}
+
+# The suffix the legacy feeds print a sleeve under. Confined to legacy_sleeve_reading below, which
+# is the only caller: it is a fallback reader for a stated fact, not the way tranching is modelled.
+LEGACY_SLEEVE_SUFFIX_RE = re.compile(r"\s*\((committed|uncommitted)\)\s*$", re.I)
 
 
-def tranche_base_name(name: str) -> str | None:
-    """The facility name with its tranche suffix removed, or None where it carries no suffix.
+def tranche_type(value) -> str:
+    """One stated tranche value, folded onto the platform's vocabulary. Blank stays blank."""
+    raw = as_is(value).strip()
+    if not raw:
+        return ""
+    return TRANCHE_TYPE_ALIASES.get(_norm(raw), raw.upper().replace(" ", "_"))
 
-    The suffix is what makes a name a sleeve of something larger. A name without one is a whole
-    facility and is never folded into a tranche set on a base-name match alone: "Fund X" standing
-    beside "Fund X (Committed)" is a separate credit agreement until someone says otherwise, and
-    grouping the two would put a full facility's borrowing base under an allocated share of a
-    pool it is not part of."""
-    base = TRANCHE_SUFFIX_RE.sub("", name).strip()
-    return base if base and TRANCHE_SUFFIX_RE.search(name) else None
+
+def legacy_sleeve_reading(name: str) -> "tuple[str, str] | None":
+    """(tranche_type, tranche_of) recovered from a legacy sleeve name, or None where it is not one.
+
+    Applied only to a facility whose feed states no tranche of its own. The suffix is what makes a
+    name a sleeve of something larger; a name without one is a whole facility and is never folded
+    into a tranche set on a base-name match alone. "Fund X" standing beside "Fund X (Committed)" is
+    a separate credit agreement until someone says otherwise, and grouping the two would put a full
+    facility's borrowing base under an allocated share of a pool it is not part of."""
+    m = LEGACY_SLEEVE_SUFFIX_RE.search(name or "")
+    if not m:
+        return None
+    base = LEGACY_SLEEVE_SUFFIX_RE.sub("", name).strip()
+    return (tranche_type(m.group(1)), base) if base else None
+
+
+# ── the agreement's own terms ────────────────────────────────────────────────────────────────
+#
+# How the members of one credit agreement answer for the debt. The platform holds three readings
+# and no others, because each is a different legal position and there is no fourth that means
+# anything to a borrowing base:
+#
+#   SEVERAL            - each member answers for its own draw and no one else's.
+#   JOINT_AND_SEVERAL  - any member can be pursued for the whole, which is what makes the members'
+#                        collateral one pool rather than several.
+#   GUARANTEED         - a third party stands behind the members' obligations.
+#
+# The spellings a document uses for the same position are folded onto them. Anything else is
+# passed through UPPER-CASED rather than dropped or approximated: the platform refuses a reading it
+# does not hold and names the row, which puts the question back to whoever wrote the file. Folding
+# an unfamiliar phrase onto a neighbouring value would record a legal position nobody stated - and
+# it is the difference between one pooled base and several separate ones.
+LIABILITY_TYPE_ALIASES = {
+    "several": "SEVERAL", "several liability": "SEVERAL", "severally": "SEVERAL",
+    "joint and several": "JOINT_AND_SEVERAL", "joint several": "JOINT_AND_SEVERAL",
+    "j s": "JOINT_AND_SEVERAL", "joint and several liability": "JOINT_AND_SEVERAL",
+    "guaranteed": "GUARANTEED", "guarantee": "GUARANTEED", "guaranty": "GUARANTEED",
+}
+
+
+def liability_type(value) -> str:
+    """One stated liability reading, folded onto the platform's vocabulary. Blank stays blank."""
+    raw = as_is(value).strip()
+    if not raw:
+        return ""
+    return LIABILITY_TYPE_ALIASES.get(_norm(raw), raw.upper().replace(" ", "_"))
+
+
+@dataclass
+class AgreementTerms:
+    """What a report row states about the AGREEMENT rather than about a facility.
+
+    Carried separately from the facility row because these are group-level facts: stamping them on
+    each member would state one agreement's terms once per fund and leave whichever row loaded last
+    holding them. Every field is blank where the report printed no such column, which is every
+    report written to date."""
+    borrower_entity: str = ""
+    sub_limit: str = ""
+    liability_type: str = ""
+
+    def any(self) -> bool:
+        return bool(self.borrower_entity or self.sub_limit or self.liability_type)
 
 # Agent Bank Summary column layout (must match the report header exactly). Index 4 is an unnamed
 # spacer holding the report's subtotal amounts.
@@ -263,6 +449,27 @@ ABS_COLS = [
     "Agent", "Borrower", "AccountNumber", "LoanAmount", "", "MaturityDate",
     "FacilityStatus", "FacilityStatusDate",
 ]
+# Columns the report may carry AFTER the eight above, located by header rather than by position so
+# they may arrive in either order or not at all. The Agent Bank Summary is the facility-level file,
+# which makes it the natural place for an agent to state which sleeve of a facility a row is - and
+# it is the only file that carries a facility the export has no LPs for. Absent on every report
+# written to date; see OPTIONAL_COLS for why that is read as "states nothing" rather than as an
+# error.
+ABS_OPTIONAL_HEADERS = {
+    # The agreement reference, and the three terms an agent prints over a GROUP row rather than
+    # over a fund: who signed, the per-member cap, and how the members answer for the debt. The
+    # last three are read only off a row that turns out to be a group row (see StatedGroup);
+    # printed over a single facility they describe that facility's own agreement, which the
+    # platform records on the facility, not on a group that does not exist.
+    "AgreementRef":   ["Agreement Ref", "AgreementRef", "Agreement Reference", "Agreement ID",
+                       "AgreementID", "Deal ID", "DealID", "Facility ID", "FacilityID"],
+    "BorrowerEntity": ["Borrower Entity", "BorrowerEntity", "Obligor Entity", "Signing Entity"],
+    "SubLimit":       ["Sub Limit", "SubLimit", "Sublimit", "Member Sublimit", "Borrower Sublimit"],
+    "LiabilityType":  ["Liability Type", "LiabilityType", "Liability", "Recourse Type"],
+    "Tranche":   ["Tranche", "Tranche Type", "TrancheType", "Sleeve", "Sleeve Type"],
+    "TrancheOf": ["Tranche Of", "TrancheOf", "Parent Facility", "ParentFacility",
+                  "Credit Agreement", "Facility Group"],
+}
 ABS_TOTAL_MARKER = "accesstotalsloanamount"  # _norm() prefix of the subtotal / grand-total rows
 # _norm() of the FacilityStatus that onboards a reported facility as Active on the report's word
 # alone, with no export match behind it. Every other spelling reads as not-Active.
@@ -775,14 +982,31 @@ def read_agent_bank_summary(path: Path) -> tuple[list[list[str]], dict[str, int]
             f"Agent Bank Summary header in '{ws.title}' does not match the expected schema.\n"
             f"  expected: {ABS_COLS}\n  found:    {header}"
         )
+    # Anything past the eight fixed columns is optional and located by header. An unrecognised
+    # trailing column is ignored, exactly as in the export reader, so the report gaining a column
+    # this script does not know about is never an error.
+    abs_header_to_col = {_norm(alias): col
+                         for col, aliases in ABS_OPTIONAL_HEADERS.items() for alias in aliases}
+    abs_optional_at: dict[str, int] = {}
+    for i, name in enumerate(header[len(ABS_COLS):], start=len(ABS_COLS)):
+        col = abs_header_to_col.get(_norm(name))
+        if col is not None:
+            abs_optional_at.setdefault(col, i)
 
     data: list[list[str]] = []
+    # The agreement terms a row states, kept by ROW INDEX rather than by account: only a row that
+    # turns out to be a GROUP row states them about an agreement, and which row that is is decided
+    # later, by upsert_facilities. Keying by account here would attribute a term printed over one
+    # fund to the whole agreement.
+    terms: dict[int, AgreementTerms] = {}
     by_acct: "OrderedDict[str, list[tuple[int, str]]]" = OrderedDict()
     seen_pair: set[tuple[str, str]] = set()
     agent = ""
 
+    width = max([len(ABS_COLS)] + [i + 1 for i in abs_optional_at.values()])
     for raw in rows_iter:
-        cells = (list(raw) + [None] * len(ABS_COLS))[: len(ABS_COLS)]
+        full = (list(raw) + [None] * width)[:width]
+        cells = full[: len(ABS_COLS)]
         text = [as_is(c) for c in cells]
         if not any(text):
             continue
@@ -803,13 +1027,25 @@ def read_agent_bank_summary(path: Path) -> tuple[list[list[str]], dict[str, int]
         # The trailing blanks are ubs_participation, collateral_date, and the three umbrella
         # columns - none of which the report states. collateral_date is filled in by
         # upsert_facilities and the umbrella columns by assign_umbrellas.
+        #
+        # The last two are the tranche declaration, taken from the report where it states one. A
+        # report that does not is left blank here and resolved later, from the export or from the
+        # legacy sleeve reading, by declare_tranches.
+        def _opt(col: str) -> str:
+            i = abs_optional_at.get(col)
+            return as_is(full[i]).strip() if i is not None else ""
         data.append([text[0] or agent or "Unknown", name, acct, text[3], iso_date(cells[5]),
-                     text[6], iso_date(cells[7]), "", "", "", "", ""])
+                     text[6], iso_date(cells[7]), "", "", "", "", "",
+                     tranche_type(_opt("Tranche")), _opt("TrancheOf"), _opt("AgreementRef")])
+        stated_terms = AgreementTerms(_opt("BorrowerEntity"), _opt("SubLimit"),
+                                      liability_type(_opt("LiabilityType")))
+        if stated_terms.any():
+            terms[len(data) - 1] = stated_terms
         # Every borrower on the account, in report order: an account listed against two borrowers
         # is two facilities and both stay eligible for the LP join.
         by_acct.setdefault(acct, []).append((len(data) - 1, printed))
 
-    return data, by_acct
+    return data, by_acct, terms
 
 
 def facility_key(row: dict) -> tuple[str, str]:
@@ -1034,8 +1270,35 @@ def build_seed(export: list[dict], name_by_key: dict[tuple[str, str], str],
     return SeedResult(seed_rows, counts, anomalies)
 
 
+@dataclass
+class StatedGroup:
+    """A report row that names a CREDIT AGREEMENT rather than a facility.
+
+    One row on an account the export carries several funds on, naming none of them: the agent has
+    printed the obligor that signs and draws, and the funds beneath it only in the export. The row's
+    terms are the agreement's - the loan amount is the whole facility's, the status and maturity are
+    the group's - so they are fed at group level and never onto a member."""
+    account: str
+    name: str                # the printed Borrower: the credit agreement's own name
+    agent_bank: str
+    loan_amount: str
+    maturity_date: str
+    bank_status: str         # as printed; normalised by the caller
+    bank_status_date: str
+    # The agreement's own identity and terms, where the report printed them over the group row.
+    # Blank on a report that printed only the eight standard columns, which is every report to
+    # date - and blank is what the ingest reads as "not stated".
+    agreement_ref: str = ""
+    borrower_entity: str = ""
+    sub_limit: str = ""
+    liability_type: str = ""
+
+
 def upsert_facilities(fac_data: list[list[str]], by_acct: dict[str, list[tuple[int, str]]],
-                      export: list[dict]) -> tuple[list[list[str]], dict[tuple[str, str], str]]:
+                      export: list[dict],
+                      terms: "dict[int, AgreementTerms] | None" = None
+                      ) -> tuple[list[list[str]], dict[tuple[str, str], str],
+                                 dict[str, StatedGroup]]:
     """Facilities from the Agent Bank Summary, joined to the export by (AccountID, FndName).
     bank_status := Active when EITHER the report states the facility is Active, OR an export
     facility claims the report row (which also gets collateral_date := that facility's most
@@ -1047,16 +1310,24 @@ def upsert_facilities(fac_data: list[list[str]], by_acct: dict[str, list[tuple[i
     include it - is an empty facility, not a closed one. The export match only ever promotes a
     status; it never demotes one the report calls Active.
 
-    The join runs per account in two passes, because the two files spell facilities differently:
+    The join runs per account, because the two files spell facilities differently:
 
+      0. an account the export carries SEVERAL funds on, whose single report row names none of them,
+         is an umbrella printed at group level: that row is the credit agreement, not a facility. It
+         is taken out of the join as a StatedGroup, its members are all built from the export, and
+         each inherits the group's agent bank, status and maturity - but not its loan amount, which
+         is the whole agreement's. Handing that row to a member instead would give one arbitrary
+         fund the group's name and the group's loan amount, and orphan the other five;
       1. a report row whose Borrower is the export's FndName owns that facility, which is what
-         gives each fund on a shared account its own report row;
+         gives each fund on a shared account its own report row, on a report that prints them;
       2. whatever is left over is handed out in report order, so a facility the two files name
          differently still resolves. On a one-borrower account this pass is the entire join.
 
     An export facility the report does not list is manufactured as a placeholder Inactive facility
     with agent bank "Unknown", carrying what the export knows - name=FndName,
-    account_number=AccountID, collateral_date=last BB date - so its LP records still seed.
+    account_number=AccountID, collateral_date=last BB date - so its LP records still seed. A member
+    of a stated group is manufactured the same way but is neither Unknown nor Inactive: the report
+    states its agent and its standing at group level, which is where an umbrella's are stated.
 
     Facility names are made unique here, because the seed feed resolves a facility by name alone
     and the platform keys facilities by name: two facilities sharing one would send a facility's
@@ -1065,16 +1336,31 @@ def upsert_facilities(fac_data: list[list[str]], by_acct: dict[str, list[tuple[i
     them rather than only the later ones is what makes the pair visible as a pair - otherwise one
     facility silently keeps the bare name and its sibling reads as a variant of it.
 
-    Returns (rows, facility_key -> resolved facility name)."""
+    Returns (rows, facility_key -> resolved facility name, account -> stated group)."""
     # A facility's Last BB date is the most recent BB run across its rows: the export is not
     # guaranteed to arrive in date order. Insertion order stays the export's first-seen order, so
     # the placeholder facilities below keep a stable, reproducible ordering.
     bbdate_by_key: "OrderedDict[tuple[str, str], str]" = OrderedDict()
     fnd_by_key: "OrderedDict[tuple[str, str], str]" = OrderedDict()
     acctno_by_key: "OrderedDict[tuple[str, str], str]" = OrderedDict()
+    # The tranche a facility's export rows state it is. Taken from the first row that states one
+    # rather than the first row outright: the columns are per-LP in the file but per-FACILITY in
+    # meaning, so a blank on one investor's row says nothing about the facility, and letting it win
+    # would drop a declaration the rest of the roster carries.
+    tranche_by_key: dict[tuple[str, str], tuple[str, str]] = {}
+    # The agreement reference a facility's export rows state, taken the same way and for the same
+    # reason: the column is per-LP in the file but per-FACILITY in meaning.
+    ref_by_key: dict[tuple[str, str], str] = {}
     for row in export:
         key = facility_key(row)
         bbdate = iso_date(row["BBDate"])
+        stated_type = tranche_type(row.get("Tranche"))
+        stated_of = as_is(row.get("TrancheOf")).strip()
+        if (stated_type or stated_of) and key not in tranche_by_key:
+            tranche_by_key[key] = (stated_type, stated_of)
+        stated_ref = as_is(row.get("AgreementRef")).strip()
+        if stated_ref and key not in ref_by_key:
+            ref_by_key[key] = stated_ref
         if key not in bbdate_by_key:
             bbdate_by_key[key] = bbdate
             fnd_by_key[key] = as_is(row["FndName"])
@@ -1092,9 +1378,32 @@ def upsert_facilities(fac_data: list[list[str]], by_acct: dict[str, list[tuple[i
     for key in bbdate_by_key:
         keys_by_acct.setdefault(key[0], []).append(key)
 
+    terms = terms or {}
     claimed: dict[tuple[str, str], int] = {}
+    groups: dict[str, StatedGroup] = {}
+    group_rows: set[int] = set()
     for acct, keys in keys_by_acct.items():
         free = list(by_acct.get(acct, []))          # [(row index, normalised Borrower), ...]
+        # pass 0 - the report row that names the credit agreement rather than a fund on it.
+        # Recognised only where it cannot be anything else: the export carries SEVERAL funds on the
+        # account, the report prints ONE row for it, and that row names none of them. One fund on
+        # the account is the ordinary rename case and stays with pass 2; two report rows and three
+        # funds is ambiguous, and an ambiguous row is left as a facility rather than promoted on a
+        # guess - demoting a facility to a group would take its LP roster with it.
+        if len(keys) > 1 and len(free) == 1 and free[0][1] not in {k[1] for k in keys}:
+            idx = free.pop(0)[0]
+            cells = out[idx]
+            # The row promoted to a group is where the agreement's own terms were printed, if the
+            # report printed any: they are read off THIS row and no other, so a term stated over one
+            # member fund is never read as the agreement's.
+            stated_terms = terms.get(idx, AgreementTerms())
+            groups[acct] = StatedGroup(acct, cells[1], cells[0], cells[3], cells[4],
+                                       cells[5], cells[6],
+                                       agreement_ref=cells[AGREEMENT_REF_COL].strip(),
+                                       borrower_entity=stated_terms.borrower_entity,
+                                       sub_limit=stated_terms.sub_limit,
+                                       liability_type=stated_terms.liability_type)
+            group_rows.add(idx)
         for key in keys:                            # pass 1 - exact FndName == Borrower
             if not key[1]:
                 continue
@@ -1113,10 +1422,20 @@ def upsert_facilities(fac_data: list[list[str]], by_acct: dict[str, list[tuple[i
     # not Active because a sibling on the same account number is.
     key_by_row = {idx: key for key, idx in claimed.items()}
     for i, row in enumerate(out):
+        if i in group_rows:
+            continue                                # not a facility; fed as an umbrella instead
         key = key_by_row.get(i)
         row[5] = "Active" if (key is not None or _norm(row[5]) == ABS_ACTIVE_STATUS) else "Inactive"
         if key is not None and bbdate_by_key[key]:
             row[8] = bbdate_by_key[key]
+
+    # The group rows come out before anything is named or counted, so a credit agreement never
+    # competes with its own member funds for a facility name and never reaches the facility feed.
+    if group_rows:
+        kept = [i for i in range(len(out)) if i not in group_rows]
+        remap = {old: new for new, old in enumerate(kept)}
+        out = [out[i] for i in kept]
+        claimed = {key: remap[idx] for key, idx in claimed.items()}
 
     # --- orphan export facilities -> placeholders ---------------------------------------------
     # A key with a blank AccountID lands here too, with a blank account_number - which is the only
@@ -1128,9 +1447,57 @@ def upsert_facilities(fac_data: list[list[str]], by_acct: dict[str, list[tuple[i
         acctno = acctno_by_key[key]
         name = fnd_by_key[key] or (f"Unknown Facility {acctno}" if acctno
                                    else "Unknown Facility (no account)")
-        out.append(["Unknown", name, acctno, "", "", "Inactive", "", "", bbdate_by_key[key],
-                    "", "", ""])
+        # A member of a stated group is not an orphan: the report does carry it, at the level the
+        # agent reports the agreement on. It takes the group's agent bank and maturity, and NOT its
+        # loan amount - that figure is what the agreement lends, not what this fund borrows, and
+        # stamping it on each member would state the same money once per fund. Active for the same
+        # reason a claimed row is: the export carries a live LP roster against it. The agreement's
+        # own printed standing is fed at group level, where the agent stated it.
+        group = groups.get(acctno)
+        if group is not None:
+            # The agreement reference is carried down to a member the report never printed a row
+            # for: it is a fact about the agreement the fund borrows under, and without it the
+            # member would group by account while its printed siblings group by reference.
+            out.append([group.agent_bank or "Unknown", name, acctno, "", group.maturity_date,
+                        "Active", group.bank_status_date, "", bbdate_by_key[key], "", "", "",
+                        "", "", group.agreement_ref])
+        else:
+            out.append(["Unknown", name, acctno, "", "", "Inactive", "", "", bbdate_by_key[key],
+                        "", "", "", "", "", ""])
         row_by_key[key] = len(out) - 1
+
+    # --- the tranche declaration -------------------------------------------------------------
+    # The export's stated tranche, over every facility the export reaches - the claimed report rows
+    # and the placeholders alike. The report is asked first (read_agent_bank_summary already filled
+    # these where it stated them) because it is the facility-level file and states a facility the
+    # export may carry no LPs for; the export fills what the report left blank.
+    for key, idx in row_by_key.items():
+        stated = tranche_by_key.get(key)
+        if stated is None:
+            continue
+        if not out[idx][TRANCHE_TYPE_COL]:
+            out[idx][TRANCHE_TYPE_COL] = stated[0]
+        if not out[idx][TRANCHE_OF_COL]:
+            out[idx][TRANCHE_OF_COL] = stated[1]
+
+    # The same order of precedence for the agreement reference: the report is the facility-level
+    # file and is asked first; the export fills what it left blank. Neither file stating one leaves
+    # the column blank, and the facility groups by its account exactly as it always has.
+    for key, idx in row_by_key.items():
+        stated_ref = ref_by_key.get(key)
+        if stated_ref and not out[idx][AGREEMENT_REF_COL].strip():
+            out[idx][AGREEMENT_REF_COL] = stated_ref
+
+    # Whatever neither file stated, read from the legacy sleeve name. This runs BEFORE the
+    # uniquifying pass below, so the reading sees the name as printed rather than one already
+    # suffixed with an account number - "Fund X (Committed) (ACC-1)" carries no readable sleeve
+    # suffix, and a set spelt that way would silently stop grouping.
+    for row in out:
+        if row[TRANCHE_TYPE_COL] or row[TRANCHE_OF_COL]:
+            continue                              # the feed said so; nothing to infer
+        reading = legacy_sleeve_reading(row[1].strip())
+        if reading is not None:
+            row[TRANCHE_TYPE_COL], row[TRANCHE_OF_COL] = reading
 
     # --- unique names ------------------------------------------------------------------------
     # One pass over report rows and placeholders together, so a placeholder is weighed against the
@@ -1153,28 +1520,42 @@ def upsert_facilities(fac_data: list[list[str]], by_acct: dict[str, list[tuple[i
         row[1] = name
 
     name_by_key = {key: out[idx][1] for key, idx in row_by_key.items()}
-    return out, name_by_key
+    return out, name_by_key, groups
 
 
 @dataclass
 class UmbrellaGroup:
     """One credit agreement covering more than one facility row, as this run found it."""
     key: str                    # what the ingest resolves the group by - stable across runs
-    name: str                   # minted here; an analyst may rename it without breaking the key
+    name: str                   # the report's, where it states one; minted otherwise
     members: list[str]          # member facility names, in run order
     cross_collateralized: bool  # True only where the members demonstrably stand on ONE base
+    # What the report states about the AGREEMENT, present only where it printed a group row. Blank
+    # on a group this script inferred from a shared account number, which states nothing of itself.
+    obligor_name: str = ""
+    agent_bank: str = ""
+    account_number: str = ""
+    loan_amount: str = ""
+    # The agreement's own reference, and the terms the report printed over the group row. The
+    # reference is what the platform resolves this group by where it is stated - the key above is
+    # then the account, or the sleeves' shared base name, and is only a fallback.
+    agreement_ref: str = ""
+    borrower_entity: str = ""
+    sub_limit: str = ""
+    liability_type: str = ""
 
 
-def assign_umbrellas(rows: list[list[str]]) -> list[UmbrellaGroup]:
+def assign_umbrellas(rows: list[list[str]],
+                     stated: dict[str, StatedGroup] | None = None) -> list[UmbrellaGroup]:
     """Stamp `umbrella_name`, `umbrella_key` and `cross_collateralized` on every facility that
     belongs to a group, and return the groups for the run report.
 
     Two shapes of group are found, and they are found differently:
 
-      * a TRANCHE SET - sleeves of one multi-tranche facility, sharing a name less its
-        "(Committed)"/"(Uncommitted)" suffix. One borrower on one collateral pool, so the group is
-        marked cross-collateralized and the platform allocates the shared base across the sleeves
-        instead of counting it once per sleeve.
+      * a TRANCHE SET - sleeves of one multi-tranche facility, recognised by the facility each of
+        them declares it is a sleeve of (`tranche_of`, settled by upsert_facilities). One borrower
+        on one collateral pool, so the group is marked cross-collateralized and the platform
+        allocates the shared base across the sleeves instead of counting it once per sleeve.
       * an ACCOUNT UMBRELLA - separate funds, feeders or SPVs borrowing under one credit agreement,
         which the agent reports against a single account number. Each member keeps its own LP
         roster and its own borrowing base.
@@ -1187,6 +1568,11 @@ def assign_umbrellas(rows: list[list[str]]) -> list[UmbrellaGroup]:
     several facilities happen to hold in common, and pooling every accountless facility into one
     umbrella would invent a credit agreement out of missing data.
 
+    `stated` carries the group rows the report printed by account (see upsert_facilities). Where an
+    account has one, the group takes the name the agent printed and the terms beside it, because
+    that name IS the credit agreement's; the account-number form is the fallback for a report that
+    named no group, not the preferred answer.
+
     Tranche sets are claimed first and their members are then withheld from account grouping, so no
     facility lands in two groups. The sleeves are the tighter and better-evidenced structure: they
     share collateral, where account members merely share paperwork. An account left with one
@@ -1197,42 +1583,116 @@ def assign_umbrellas(rows: list[list[str]]) -> list[UmbrellaGroup]:
     neither source file states it, and a guess would read downstream as the legal position. The
     column is left blank, which the ingest reads as "not stated" and never as "no".
     """
+    stated = stated or {}
     taken_names = {_norm(row[1]) for row in rows}
     claimed: set[int] = set()
     groups: list[UmbrellaGroup] = []
 
-    # Tranche sets first, keyed on the shared base name through _norm(). The sleeves are typed by
-    # hand into the agent's system one at a time, so the pair reaches the file spelt the same way
-    # only by habit - "MERRIDEN OPPORTUNITIES FUND V (COMMITTED)" beside "Merriden Opportunities
-    # Fund V (Uncommitted)" is one credit agreement whichever way the shift key fell. Matching on
-    # the literal name would leave that pair ungrouped and its one borrowing base counted twice.
+    def agreed_ref(idxs: list[int]) -> str:
+        """The agreement reference a set of member rows AGREES on, or blank.
+
+        Blank where they disagree, and deliberately so: two references over one group is a
+        contradiction in the file, and picking either would resolve the group onto an agreement
+        half its members were never said to be under. Blank leaves the group resolving by its key,
+        which is what it did before any reference was stated, and the disagreement stays visible in
+        the facility rows."""
+        refs = {rows[i][AGREEMENT_REF_COL].strip() for i in idxs}
+        refs.discard("")
+        return refs.pop() if len(refs) == 1 else ""
+
+    # Tranche sets first, keyed on the facility each sleeve DECLARES it is a sleeve of, through
+    # _norm(). The declaration is what upsert_facilities settled on the row - the report's column,
+    # the export's, or the legacy sleeve reading where neither file states one - so this pass reads
+    # one field and never a name pattern. A sleeve set named in a way no pattern anticipates groups
+    # correctly the moment the feed states its parent, which is the whole point of the column.
+    #
+    # Normalising is what absorbs the spelling drift. The sleeves are typed by hand into the agent's
+    # system one at a time, so a pair reaches the file spelt the same way only by habit -
+    # "MERRIDEN OPPORTUNITIES FUND V" beside "Merriden Opportunities Fund V" is one credit
+    # agreement whichever way the shift key fell, and matching literally would leave that pair
+    # ungrouped and its one borrowing base counted twice.
     #
     # The normalized form is also what the group is KEYED by, so the key holds still when a later
     # run receives the same pair spelt differently. Keying on whichever spelling this run happened
     # to read first would resolve to a different group next time and build a duplicate beside it.
     by_base: "OrderedDict[str, list[int]]" = OrderedDict()
     for i, row in enumerate(rows):
-        base = tranche_base_name(row[1].strip())
+        base = row[TRANCHE_OF_COL].strip()
         if base:
             by_base.setdefault(_norm(base), []).append(i)
 
     for key, idxs in by_base.items():
         if len(idxs) < 2:
-            continue  # a lone sleeve is just a facility with a parenthetical in its name
-        # The base name IS the credit agreement's name, so it is used as-is - unless a facility of
-        # its own already answers to it, in which case the group takes the prefixed form to keep
-        # the two apart on screen. Taken from the first sleeve, since the key is normalized and the
-        # analyst should read the agreement's name as the file spells it, not folded flat.
-        base = tranche_base_name(rows[idxs[0]][1].strip()) or key
+            continue  # a lone sleeve is just a facility; there is nothing to relate it to
+        # The declared parent IS the credit agreement's name, so it is used as-is - unless a
+        # facility of its own already answers to it, in which case the group takes the prefixed
+        # form to keep the two apart on screen. Taken from the first sleeve, since the key is
+        # normalized and the analyst should read the agreement's name as the file spells it, not
+        # folded flat.
+        base = rows[idxs[0]][TRANCHE_OF_COL].strip() or key
         name = base if key not in taken_names else f"{UMBRELLA_NAME_PREFIX}{base}"
         for i in idxs:
             rows[i][9] = name
             rows[i][10] = key
             rows[i][11] = "true"
             claimed.add(i)
-        groups.append(UmbrellaGroup(key, name, [rows[i][1] for i in idxs], True))
+        # The sleeves hold an account number each, so the set records none of them as the group's,
+        # and the report prints no row above them - the agent bank is the one they agree on.
+        groups.append(UmbrellaGroup(key, name, [rows[i][1] for i in idxs], True,
+                                    agent_bank=rows[idxs[0]][0],
+                                    agreement_ref=agreed_ref(idxs)))
 
-    # Then account umbrellas, over whatever the tranche pass did not claim.
+    # Then the AGREEMENT REFERENCE, over whatever the tranche pass did not claim. This is the key
+    # the grouping now turns on, and it sits ahead of the account number because it is the better
+    # evidence: a reference identifies the agreement itself, where an account identifies how one
+    # bank happens to administer it. Two accounts under one reference are ONE credit agreement -
+    # grouped by account they were two, each carrying its own borrowing base, and the same
+    # collateral was reported twice.
+    #
+    # It sits BEHIND the tranche pass for the same reason the account pass does: sleeves share
+    # collateral, which is the tighter fact, and a sleeve set already resolved is not re-cut here.
+    #
+    # A reference stated over a single facility groups nothing - there is nothing to relate it to -
+    # and that facility falls through to the account pass with its reference still on its row, so
+    # the platform stamps it on whatever group the account forms.
+    by_ref: "OrderedDict[str, list[int]]" = OrderedDict()
+    for i, row in enumerate(rows):
+        ref = row[AGREEMENT_REF_COL].strip()
+        if ref and i not in claimed:
+            by_ref.setdefault(ref, []).append(i)
+
+    for ref, idxs in by_ref.items():
+        if len(idxs) < 2:
+            continue
+        # The report's printed group row for whichever account these rows are on, where there is
+        # one: the agent's own name for the agreement beats a name minted from its reference.
+        printed = next((stated[a] for a in
+                        (rows[i][2].strip() for i in idxs) if a in stated), None)
+        base = printed.name if printed is not None and printed.name else ref
+        name = base if _norm(base) not in taken_names else f"{UMBRELLA_NAME_PREFIX}{base}"
+        for i in idxs:
+            rows[i][9] = name
+            rows[i][10] = ref
+            # Not inferred here either. Members under one reference share paperwork; whether they
+            # stand on ONE borrowing base is a term of that paperwork, and no file states it.
+            rows[i][11] = ""
+            claimed.add(i)
+        # The account is recorded only where every member is on the same one - which is exactly not
+        # the case this pass exists to handle.
+        accounts = {rows[i][2].strip() for i in idxs}
+        groups.append(UmbrellaGroup(
+            ref, name, [rows[i][1] for i in idxs], False,
+            obligor_name=printed.name if printed is not None else "",
+            agent_bank=(printed.agent_bank if printed is not None and printed.agent_bank
+                        else rows[idxs[0]][0]),
+            account_number=accounts.pop() if len(accounts) == 1 else "",
+            loan_amount=printed.loan_amount if printed is not None else "",
+            agreement_ref=ref,
+            borrower_entity=printed.borrower_entity if printed is not None else "",
+            sub_limit=printed.sub_limit if printed is not None else "",
+            liability_type=printed.liability_type if printed is not None else ""))
+
+    # Then account umbrellas, over whatever neither pass claimed.
     by_acct: "OrderedDict[str, list[int]]" = OrderedDict()
     for i, row in enumerate(rows):
         acct = row[2].strip()
@@ -1242,12 +1702,39 @@ def assign_umbrellas(rows: list[list[str]]) -> list[UmbrellaGroup]:
     for acct, idxs in by_acct.items():
         if len(idxs) < 2:
             continue
-        name = f"{UMBRELLA_NAME_PREFIX}{acct}"
+        printed = stated.get(acct)
+        # The printed name unless a facility of its own already answers to it, exactly as a tranche
+        # set's base name is treated: the two must stay apart on screen, and the group is the one
+        # that yields, since the facility's name is what its LP records resolve by.
+        if printed is not None and printed.name and _norm(printed.name) not in taken_names:
+            name = printed.name
+        elif printed is not None and printed.name:
+            name = f"{UMBRELLA_NAME_PREFIX}{printed.name}"
+        else:
+            name = f"{UMBRELLA_NAME_PREFIX}{acct}"
         for i in idxs:
             rows[i][9] = name
             rows[i][10] = acct
             rows[i][11] = ""
-        groups.append(UmbrellaGroup(acct, name, [rows[i][1] for i in idxs], False))
+        groups.append(UmbrellaGroup(
+            acct, name, [rows[i][1] for i in idxs], False,
+            # The obligor is the printed Borrower: on a group row the agent names the entity that
+            # signs and draws, which is precisely what the platform records as the obligor.
+            obligor_name=printed.name if printed is not None else "",
+            agent_bank=printed.agent_bank if printed is not None else rows[idxs[0]][0],
+            account_number=acct,
+            # The whole agreement's line, which is a group-level figure: it is stated once, over
+            # every member fund, and no member borrows it alone.
+            loan_amount=printed.loan_amount if printed is not None else "",
+            # A group whose members all name one agreement carries it, so the platform resolves the
+            # group by the reference from here on and the account number becomes the fallback it
+            # now is. Reached where fewer than two members stated the reference outright - a group
+            # row that states one over members that do not, most often.
+            agreement_ref=(printed.agreement_ref if printed is not None and printed.agreement_ref
+                           else agreed_ref(idxs)),
+            borrower_entity=printed.borrower_entity if printed is not None else "",
+            sub_limit=printed.sub_limit if printed is not None else "",
+            liability_type=printed.liability_type if printed is not None else ""))
 
     return groups
 
@@ -1270,6 +1757,18 @@ def write_facilities(path: Path, rows: list[list[str]]) -> None:
             w.writerow((r + [""] * len(FACILITY_COLS))[: len(FACILITY_COLS)])
 
 
+def write_umbrellas(path: Path, groups: list[UmbrellaGroup]) -> None:
+    """The group feed. Written even when empty, so a run that found no group states that rather
+    than leaving the last run's file to be read as this run's."""
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh, quoting=csv.QUOTE_ALL)
+        w.writerow(UMBRELLA_COLS)
+        for g in groups:
+            w.writerow([g.key, g.name, g.obligor_name, g.agent_bank, g.account_number,
+                        g.loan_amount, "true" if g.cross_collateralized else "",
+                        g.agreement_ref, g.borrower_entity, g.sub_limit, g.liability_type])
+
+
 def main() -> int:
     export_path = Path(EXPORT_FILE)
     abs_path = Path(AGENT_BANK_SUMMARY_FILE)
@@ -1279,15 +1778,16 @@ def main() -> int:
 
     ref = load_references(ref_dir)
     # Small file first, so a missing/renamed report fails before the big export is parsed.
-    fac_data, by_acct = read_agent_bank_summary(abs_path)
+    fac_data, by_acct, abs_terms = read_agent_bank_summary(abs_path)
     export = read_export(export_path)
 
     # Facilities first: manufactures placeholders for orphan accounts and returns the
     # account -> facility name map the seed uses, so every LP record resolves to a facility.
-    fac_rows, name_by_key = upsert_facilities(fac_data, by_acct, export)
+    fac_rows, name_by_key, stated_groups = upsert_facilities(
+        fac_data, by_acct, export, abs_terms)
     # After the names are final, so the umbrella reports the members under the names the platform
     # will know them by rather than the ones the report printed.
-    umbrellas = assign_umbrellas(fac_rows)
+    umbrellas = assign_umbrellas(fac_rows, stated_groups)
     master_rows = build_master(export, ref)
     sr = build_seed(export, name_by_key, ref)
 
@@ -1301,7 +1801,7 @@ def main() -> int:
             f"(AccountID, FndName) facility, so their LP records would be merged: {dup_names}"
         )
 
-    # Clear data/out/ so it holds only this run's three CSVs. Done after all inputs are read, so a
+    # Clear data/out/ so it holds only this run's four CSVs. Done after all inputs are read, so a
     # failed read leaves the last good outputs in place. import/ and reference/ are never touched.
     for old in out_dir.iterdir():
         if old.is_file():
@@ -1310,6 +1810,7 @@ def main() -> int:
     write_csv(out_dir / "lp_master.csv", MASTER_COLS, master_rows)
     write_csv(out_dir / "lp_facility_seeds.csv", SEED_COLS, sr.rows)
     write_facilities(out_dir / "facilities.csv", fac_rows)
+    write_umbrellas(out_dir / "umbrellas.csv", umbrellas)
 
     # Retention is an invariant, not a metric: every export row must appear in
     # lp_facility_seeds.csv. A mismatch is a bug in this script, so it fails the run.
@@ -1359,6 +1860,12 @@ def main() -> int:
             print(f"  {g.name:<40}: {', '.join(g.members)}")
         if len(accounts) > 20:
             print(f"  ... and {len(accounts) - 20} more")
+        named = [g for g in accounts if g.obligor_name]
+        if named:
+            print(f"  {len(named)} of them {'is' if len(named) == 1 else 'are'} printed at GROUP "
+                  "level - the report names the "
+                  "obligor and states the agreement's terms, and none of its member funds. Those "
+                  "terms are fed as the umbrella; the funds come from the export.")
         print("  cross-collateralization is a term of the credit agreement, is stated by neither "
               "source file, and is left for an analyst to set")
 

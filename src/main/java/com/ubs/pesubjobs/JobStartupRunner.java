@@ -16,6 +16,8 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.OptionalLong;
@@ -26,6 +28,7 @@ public class JobStartupRunner implements ApplicationRunner {
     private static final Logger log = LoggerFactory.getLogger(JobStartupRunner.class);
 
     private final JobOperator jobOperator;
+    private final Job umbrellaIngestJob;
     private final Job facilityIngestJob;
     private final Job lpMasterIngestJob;
     private final Job lpRecordsSeedJob;
@@ -34,6 +37,7 @@ public class JobStartupRunner implements ApplicationRunner {
     private final PeSubApiClient apiClient;
 
     public JobStartupRunner(JobOperator jobOperator,
+                            @Qualifier("umbrellaIngestJob") Job umbrellaIngestJob,
                             @Qualifier("facilityIngestJob") Job facilityIngestJob,
                             @Qualifier("lpMasterIngestJob") Job lpMasterIngestJob,
                             @Qualifier("lpRecordsSeedJob") Job lpRecordsSeedJob,
@@ -41,6 +45,7 @@ public class JobStartupRunner implements ApplicationRunner {
                             IngestProperties ingestProperties,
                             PeSubApiClient apiClient) {
         this.jobOperator = jobOperator;
+        this.umbrellaIngestJob = umbrellaIngestJob;
         this.facilityIngestJob = facilityIngestJob;
         this.lpMasterIngestJob = lpMasterIngestJob;
         this.lpRecordsSeedJob = lpRecordsSeedJob;
@@ -73,6 +78,19 @@ public class JobStartupRunner implements ApplicationRunner {
             return;
         }
 
+        // Groups first: a facility names its umbrella on its own row, so the group must already be
+        // onboarded under the name the agent printed. A feed set written before umbrellas.csv
+        // existed simply has no file — the facilities then fall back to grouping by account number,
+        // which is the behaviour that feed set was extracted for.
+        String umbrellaFile = ingestProperties.umbrellaFile();
+        if (umbrellaFile == null || umbrellaFile.isBlank()) {
+            log.info("[umbrella-ingest] skipped - no feed file configured (ingest.umbrella-file)");
+        } else if (!Files.isReadable(Path.of(umbrellaFile))) {
+            log.warn("[umbrella-ingest] skipped - no readable feed file at {}. Facility groups will be named from what the facility feed carries.",
+                    umbrellaFile);
+        } else {
+            runJob("umbrella-ingest", umbrellaIngestJob, umbrellaFile);
+        }
         runJob("facility-ingest", facilityIngestJob, ingestProperties.facilityFile());
         runJob("lp-master-ingest", lpMasterIngestJob, ingestProperties.lpMasterFile());
         runJob("lp-records-seed", lpRecordsSeedJob, ingestProperties.lpFacilitySeedsFile());

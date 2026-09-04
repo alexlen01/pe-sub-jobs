@@ -4,6 +4,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -40,6 +41,9 @@ public class JobsSecurityConfig {
                         // Container error dispatch must render the ProblemDetail body rather than
                         // being re-evaluated as an unauthenticated request.
                         .requestMatchers("/error").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/manage/health").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/manage/health/liveness").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/manage/health/readiness").permitAll()
                         .requestMatchers("/jobs/**").hasRole(props.getRequiredRole())
                         .anyRequest().denyAll())
                 .build();

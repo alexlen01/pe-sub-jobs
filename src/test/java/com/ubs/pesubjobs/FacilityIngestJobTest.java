@@ -43,9 +43,9 @@ class FacilityIngestJobTest extends IntegrationTestBase {
     @Test
     void parsesFeedAndPostsTypedRowsToApi() throws Exception {
         // Column order matches facilities.csv: agent_bank, name, account_number, loan_amount,
-        // maturity_date, bank_status, bank_status_date, ubs_participation, collateral_date.
+        // maturity_date, status, status_date, ubs_participation, collateral_date.
         JobExecution execution = runFeed("""
-                "agent_bank","name","account_number","loan_amount","maturity_date","bank_status","bank_status_date","ubs_participation","collateral_date"
+                "agent_bank","name","account_number","loan_amount","maturity_date","status","status_date","ubs_participation","collateral_date"
                 "Bank of America","HIG LBO IV","5VX1796","75000000","10/26/2026","Active","5/21/2026","9502500.00","2026-06-09"
                 """);
 
@@ -59,7 +59,7 @@ class FacilityIngestJobTest extends IntegrationTestBase {
         assertThat(row.accountNumber()).isEqualTo("5VX1796");
         assertThat(row.loanAmount()).isEqualByComparingTo(new BigDecimal("75000000"));
         assertThat(row.maturityDate()).isEqualTo(LocalDate.of(2026, 10, 26));   // M/d/yyyy
-        assertThat(row.bankStatusDate()).isEqualTo(LocalDate.of(2026, 5, 21));  // M/d/yyyy
+        assertThat(row.status()).isEqualTo("Active");
         assertThat(row.ubsParticipation()).isEqualByComparingTo(new BigDecimal("9502500.00"));
         assertThat(row.collateralDate()).isEqualTo(LocalDate.of(2026, 6, 9));   // ISO
     }
@@ -69,7 +69,7 @@ class FacilityIngestJobTest extends IntegrationTestBase {
         // Neither a missing agent bank nor a missing name is filtered out here; both are filled
         // in by the API, which owns the constraints.
         JobExecution execution = runFeed("""
-                "agent_bank","name","account_number","loan_amount","maturity_date","bank_status","bank_status_date","ubs_participation","collateral_date"
+                "agent_bank","name","account_number","loan_amount","maturity_date","status","status_date","ubs_participation","collateral_date"
                 "Bank of America","HIG LBO IV","5VX1796","75000000","10/26/2026","Active","5/21/2026","9502500.00","2026-06-09"
                 "","Nameless Agent Facility","X","1","2026-01-01","Active","2026-01-01","1","2026-01-01"
                 "Bank of America","","5VX9999","1","2026-01-01","Active","2026-01-01","1","2026-01-01"
@@ -89,7 +89,7 @@ class FacilityIngestJobTest extends IntegrationTestBase {
         // states the grouping outright; this job never works it out, because it reads the file in
         // chunks and so never has enough of it in view to notice two rows sharing an account.
         JobExecution execution = runFeed("""
-                "agent_bank","name","account_number","loan_amount","maturity_date","bank_status","bank_status_date","ubs_participation","collateral_date","umbrella_name"
+                "agent_bank","name","account_number","loan_amount","maturity_date","status","status_date","ubs_participation","collateral_date","umbrella_name"
                 "Bank of America","Carlyle Buyout Umbrella","5VZ8873","100000000","2028-01-12","Active","2026-05-13","","2026-04-28","Umbrella 5VZ8873"
                 "Bank of America","Oaktree Opportunities Fund Xb","5VZ8873","112000000","2027-07-21","Active","2025-07-23","","2025-11-24","Umbrella 5VZ8873"
                 "Bank of America","HIG LBO IV","5VX1796","75000000","10/26/2026","Active","5/21/2026","9502500.00","2026-06-09",""
@@ -111,7 +111,7 @@ class FacilityIngestJobTest extends IntegrationTestBase {
         // a key of its own. It also states that the sleeves stand on one borrowing base, which for
         // a tranche set it can know: same borrower, same collateral, split only by commitment.
         JobExecution execution = runFeed("""
-                "agent_bank","name","account_number","loan_amount","maturity_date","bank_status","bank_status_date","ubs_participation","collateral_date","umbrella_name","umbrella_key","cross_collateralized"
+                "agent_bank","name","account_number","loan_amount","maturity_date","status","status_date","ubs_participation","collateral_date","umbrella_name","umbrella_key","cross_collateralized"
                 "Bank of America","Ares Direct Lending (Committed)","5VZ1001","60000000","2028-01-12","Active","2026-05-13","","2026-04-28","Ares Direct Lending","Ares Direct Lending","true"
                 "Bank of America","Ares Direct Lending (Uncommitted)","5VZ1002","40000000","2028-01-12","Active","2026-05-13","","2026-04-28","Ares Direct Lending","Ares Direct Lending","true"
                 "Bank of America","Carlyle Buyout Umbrella","5VZ8873","100000000","2028-01-12","Active","2026-05-13","","2026-04-28","Umbrella 5VZ8873","5VZ8873",""
@@ -130,38 +130,11 @@ class FacilityIngestJobTest extends IntegrationTestBase {
     }
 
     @Test
-    void carriesTheTrancheDeclarationTheFeedStates() throws Exception {
-        // The sleeve relationship, stated by the feed rather than recovered downstream by stripping
-        // a "(Committed)" suffix off the name. A suffix match finds only the names someone wrote a
-        // pattern for; the second row here — a delayed-draw line named nothing like its parent — is
-        // invisible to one, and its share of the borrowing base would be counted as a facility of
-        // its own. The type is passed through as written, including a spelling the platform does not
-        // hold, because a bad value has to arrive intact to be seen and fixed at source.
-        JobExecution execution = runFeed("""
-                "agent_bank","name","account_number","loan_amount","maturity_date","bank_status","bank_status_date","ubs_participation","collateral_date","umbrella_name","umbrella_key","cross_collateralized","tranche_type","tranche_of"
-                "Bank of America","Ares Direct Lending (Committed)","5VZ1001","60000000","2028-01-12","Active","2026-05-13","","2026-04-28","Ares Direct Lending","Ares Direct Lending","true","COMMITTED","Ares Direct Lending"
-                "Bank of America","Ares Capex Line","5VZ1002","40000000","2028-01-12","Active","2026-05-13","","2026-04-28","Ares Direct Lending","Ares Direct Lending","true","DELAYED_DRAW","Ares Direct Lending"
-                "Bank of America","Carlyle Buyout Umbrella","5VZ8873","100000000","2028-01-12","Active","2026-05-13","","2026-04-28","Umbrella 5VZ8873","5VZ8873","","",""
-                """);
-
-        assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
-        List<ProcessedFacility> rows = capturedFacilityRows();
-        assertThat(rows)
-                .extracting((ProcessedFacility f) -> f.trancheType())
-                // A fund that is not a sleeve declares nothing, and blank arrives as null rather
-                // than as an empty tranche type.
-                .containsExactly("COMMITTED", "DELAYED_DRAW", null);
-        assertThat(rows)
-                .extracting((ProcessedFacility f) -> f.trancheOf())
-                .containsExactly("Ares Direct Lending", "Ares Direct Lending", null);
-    }
-
-    @Test
     void feedWrittenBeforeTheUmbrellaColumnExisted_stillLoads() throws Exception {
         // The umbrella columns are last and the tokenizer is lenient, so a nine-column feed loads
         // and simply states no umbrella — an older feed file is never a failed run.
         JobExecution execution = runFeed("""
-                "agent_bank","name","account_number","loan_amount","maturity_date","bank_status","bank_status_date","ubs_participation","collateral_date"
+                "agent_bank","name","account_number","loan_amount","maturity_date","status","status_date","ubs_participation","collateral_date"
                 "Bank of America","HIG LBO IV","5VX1796","75000000","10/26/2026","Active","5/21/2026","9502500.00","2026-06-09"
                 """);
 
@@ -172,11 +145,7 @@ class FacilityIngestJobTest extends IntegrationTestBase {
         assertThat(rows.getFirst().umbrellaName()).isNull();
         assertThat(rows.getFirst().umbrellaKey()).isNull();
         assertThat(rows.getFirst().umbrellaCrossCollateralized()).isNull();
-        // Same for the tranche columns, which are last of all: a feed written before they existed
-        // simply states no tranche, and the API leaves any declaration it already holds alone.
-        assertThat(rows.getFirst().trancheType()).isNull();
-        assertThat(rows.getFirst().trancheOf()).isNull();
-        // And for the agreement reference, newest of all: silence, so the API groups the row by its
+        // And for the agreement reference, last of all: silence, so the API groups the row by its
         // key exactly as it did before the column existed.
         assertThat(rows.getFirst().agreementRef()).isNull();
     }
@@ -188,10 +157,10 @@ class FacilityIngestJobTest extends IntegrationTestBase {
         // agreement with two borrowers. The reference is what the API resolves on first, so an
         // account re-papered between runs no longer splits the group.
         JobExecution execution = runFeed("""
-                "agent_bank","name","account_number","loan_amount","maturity_date","bank_status","bank_status_date","ubs_participation","collateral_date","umbrella_name","umbrella_key","cross_collateralized","tranche_type","tranche_of","agreement_ref"
-                "Wells Fargo","Carlyle Buyout V","5VZ8873","100000000","2028-01-12","Active","2026-05-13","","2026-04-28","Carlyle Buyout Umbrella","5VZ8873","","","","CA-2021-4471"
-                "Wells Fargo","Carlyle Buyout VI","5VZ9001","150000000","2028-01-12","Active","2026-05-13","","2026-04-28","Carlyle Buyout Umbrella","5VZ9001","","","","CA-2021-4471"
-                "Wells Fargo","HIG LBO IV","5VX1796","75000000","2028-01-12","Active","2026-05-13","","2026-04-28","","","","",""
+                "agent_bank","name","account_number","loan_amount","maturity_date","status","status_date","ubs_participation","collateral_date","umbrella_name","umbrella_key","cross_collateralized","agreement_ref"
+                "Wells Fargo","Carlyle Buyout V","5VZ8873","100000000","2028-01-12","Active","2026-05-13","","2026-04-28","Carlyle Buyout Umbrella","5VZ8873","","CA-2021-4471"
+                "Wells Fargo","Carlyle Buyout VI","5VZ9001","150000000","2028-01-12","Active","2026-05-13","","2026-04-28","Carlyle Buyout Umbrella","5VZ9001","","CA-2021-4471"
+                "Wells Fargo","HIG LBO IV","5VX1796","75000000","2028-01-12","Active","2026-05-13","","2026-04-28","","",""
                 """);
 
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);

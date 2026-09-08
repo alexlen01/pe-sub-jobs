@@ -17,14 +17,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from lp_db_extract import (  # noqa: E402
-    FACILITY_COLS, SRC_COLS, assign_umbrellas, legacy_sleeve_reading, upsert_facilities,
+    FACILITY_WORK_COLS, SRC_COLS, assign_umbrellas, legacy_sleeve_reading, upsert_facilities,
 )
 
 AGENT, NAME, ACCT, LOAN, MATURITY, STATUS = 0, 1, 2, 3, 4, 5
 UMBRELLA, KEY, XCOLL = 9, 10, 11
-TRANCHE_TYPE = FACILITY_COLS.index("tranche_type")
-TRANCHE_OF = FACILITY_COLS.index("tranche_of")
-AGREEMENT_REF = FACILITY_COLS.index("agreement_ref")
+TRANCHE_TYPE = FACILITY_WORK_COLS.index("tranche_type")
+TRANCHE_OF = FACILITY_WORK_COLS.index("tranche_of")
+AGREEMENT_REF = FACILITY_WORK_COLS.index("agreement_ref")
 
 failures: list[str] = []
 
@@ -35,13 +35,13 @@ def check(label: str, actual, expected) -> None:
 
 
 def facility(name: str, account: str, agreement_ref: str = "") -> list[str]:
-    """A FACILITY_COLS-shaped row with only the fields the grouping reads populated.
+    """A FACILITY_WORK_COLS-shaped row with only the fields the grouping reads populated.
 
     The tranche declaration is filled here the way upsert_facilities fills it for a file that
     states none - from the legacy sleeve suffix - because the grouping itself reads the
     declaration and nothing else. That separation is the point of the column: the suffix supplies
     a default for a field the feed is expected to carry, and stops deciding anything on its own."""
-    row = [""] * len(FACILITY_COLS)
+    row = [""] * len(FACILITY_WORK_COLS)
     row[0], row[NAME], row[ACCT] = "Ashford Bank", name, account
     row[AGREEMENT_REF] = agreement_ref
     reading = legacy_sleeve_reading(name)
@@ -152,7 +152,7 @@ check("and no facility carries two groups",
 def report_row(agent: str, borrower: str, acct: str, loan: str = "", maturity: str = "",
                status: str = "Active") -> list[str]:
     """An Agent Bank Summary row as read_agent_bank_summary emits it."""
-    row = [""] * len(FACILITY_COLS)
+    row = [""] * len(FACILITY_WORK_COLS)
     row[AGENT], row[NAME], row[ACCT] = agent, borrower, acct
     row[LOAN], row[MATURITY], row[STATUS] = loan, maturity, status
     return row
@@ -203,8 +203,6 @@ check("under the name the report states, not one minted from the account number"
       groups[0].name, "Carlyle Buyout Umbrella")
 check("keyed on the account, so an analyst rename survives the next run",
       groups[0].key, "5VZ8873")
-check("the printed Borrower is the obligor that signs and draws",
-      groups[0].obligor_name, "Carlyle Buyout Umbrella")
 check("the agreement's line rides on the group, not on its members",
       (groups[0].loan_amount, groups[0].agent_bank), ("1500000000", "Wells Fargo"))
 check("all six funds are members", sorted(groups[0].members), sorted(CARLYLE))
@@ -232,7 +230,8 @@ rows, name_by_key, stated = upsert_facilities(
 check("a report that prints every member states no group row", stated, {})
 groups = assign_umbrellas(rows, stated)
 check("so the group's name is still minted from the account", groups[0].name, "Umbrella 5VZ8873")
-check("and it records no obligor, because the report named none", groups[0].obligor_name, "")
+check("and it records no agreement line, because the report printed none over the group",
+      groups[0].loan_amount, "")
 
 # Two report rows over three funds: one row may be a group row and one a member, or both members
 # spelt differently. An ambiguous row stays a facility - demoting one to a group would take its LP
@@ -245,7 +244,7 @@ rows, name_by_key, stated = upsert_facilities(
 check("an ambiguous account is not promoted to a group", stated, {})
 check("and every fund still resolves to a facility", len(name_by_key), 3)
 
-# The obligor may also borrow in its own right, on its own account. Umbrella and facility names
+# The signing entity may also borrow in its own right, on its own account. Umbrella and facility names
 # share one namespace on screen, so the group yields the bare name - a facility's name is what its
 # LP records resolve by, and renaming it would strand them.
 fac_data, by_acct = report([report_row("Ashford Bank", "Sablecreek Holdings", "5VZ8873"),
@@ -258,8 +257,6 @@ check("the group row is read on the multi-fund account only", list(stated), ["5V
 groups = assign_umbrellas(rows, stated)
 check("a group whose printed name a facility already holds is prefixed apart",
       groups[0].name, "Umbrella Sablecreek Holdings")
-check("but the obligor is still recorded as printed",
-      groups[0].obligor_name, "Sablecreek Holdings")
 check("and the standalone facility keeps the bare name", sorted(name_by_key.values()),
       ["Sablecreek Fund IX", "Sablecreek Fund X", "Sablecreek Holdings"])
 

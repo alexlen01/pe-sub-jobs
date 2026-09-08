@@ -47,6 +47,15 @@ facility, at the same capital commitments and the same called/uncalled split: th
 gives the ingestion's duplicate matching something to match. The rest are investors that exist only
 on the agent's file, which is what gives it something to fail to match.
 
+WHY AN UMBRELLA IS ONE FILE AND NOT SIX
+Several related funds, feeders and SPVs draw on ONE credit agreement, which is why the export books
+them all against a single account number. The agent certifies the AGREEMENT, not each fund, so an
+account the export shares between UMBRELLA_MEMBERS borrowers produces ONE certificate carrying every
+member's roster — and whatever the report printed over that account, one row for the group or one
+row per member, is replaced by that single file. The group is named for what its members' names have
+in common, marked as the umbrella it is; it is never named for the account number, which names
+nothing a reader of either file could look up.
+
 A carried row is never a copy. The agent states its OWN credit view of the LP, so its LP category,
 its agency ratings, its investor type and therefore its advance rate, concentration limit and
 borrowing base all differ from the export's — while staying inside the canonical reference vocabularies for
@@ -90,7 +99,7 @@ DATA_DIR = SCRIPT_DIR.parent / "data"
 REFERENCE_DIR = DATA_DIR / "reference"                 # the canonical vocabularies the extract uses
 IMPORT_DIR = DATA_DIR / "import"
 ABS_IN = IMPORT_DIR / "AgentBankSummaryRpt.xlsx"
-EXPORT_IN = IMPORT_DIR / "LP DB Export V2.xlsx"
+EXPORT_IN = IMPORT_DIR / "LP DB Export V3.xlsx"
 DEFAULT_OUT = IMPORT_DIR / "AgentBBs"
 ABS_SHEET_NAME = "Agent Bank Summary"
 EXPORT_SHEET_NAME = "BBs"
@@ -98,7 +107,7 @@ EXPORT_SHEET_NAME = "BBs"
 logger = logging.getLogger("lp_agent_bb_generate")
 
 # ── tunables ────────────────────────────────────────────────────────────────────────────────────
-SEED = 20260831
+SEED = 20260908
 # Share of a facility's rows the agent's file and the LP DB Export agree on by INVESTOR. The
 # remainder are investors only the agent carries: an LP the bank has not onboarded yet, which is the
 # row the match queue has to raise rather than auto-accept. Row COUNT is held at the export's, so
@@ -120,6 +129,17 @@ RATE_SHIFTS = (0, 0, 0, 0, 0, 0, 1, -1)   # rungs down/up AGENT_RATE_LADDER
 AGENT_RATE_LADDER = (0.90, 0.75, 0.60, 0.50, 0.25, 0.00)
 UNCOMMITTED_CL_FACTOR = 0.5
 TRANCHE_SUFFIX_RE = re.compile(r"\s*\((committed|uncommitted)\)\s*$", re.I)
+
+# An umbrella subscription facility is an account number the export shares between this many
+# borrowers. Two funds on one account are as often a feeder beside its master as a group, so the
+# floor sits where the account stops reading as a pair and starts reading as a book: below it the
+# borrowers keep their own certificates.
+UMBRELLA_MEMBERS = (4, 6)
+# The group has to say it is one, in the two spellings the report itself uses. The name is asserted
+# to carry one of them before the workbook is written.
+UMBRELLA_MARKERS = ("Umbrella", "[U]")
+UMBRELLA_SUFFIX = "Umbrella"
+UMBRELLA_MARKER_RE = re.compile(r"\s*(Umbrella|\[U\])\s*$", re.I)
 
 # Windows reserves these in a path segment; a Borrower name carrying one still has to produce a file.
 ILLEGAL_PATH_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -284,6 +304,7 @@ class AgentLp:
     bb: float = 0.0
     recallable: float = 0.0     # the feeders form reports it instead of called capital
     carried: bool = True        # False = an investor only the agent's file carries
+    member: str = ""            # on an umbrella, the borrower under the agreement this row draws on
     sleeve: str = ""
     ga_id: str = ""
     transferred: str = ""
@@ -309,6 +330,7 @@ class Facility:
     status: str
     status_date: Optional[date]
     bb_date: date
+    members: tuple[str, ...] = ()   # the borrowers under one agreement; empty on a single facility
     lps: list[AgentLp] = field(default_factory=list)
     tot_commit: float = 0.0
     tot_called: float = 0.0
@@ -321,6 +343,10 @@ class Facility:
     def tranche(self) -> Optional[str]:
         m = TRANCHE_SUFFIX_RE.search(self.borrower)
         return m.group(1).title() if m else None
+
+    @property
+    def is_umbrella(self) -> bool:
+        return bool(self.members)
 
 
 def _as_date(v) -> Optional[date]:
@@ -392,6 +418,104 @@ def load_export_rows(path: Path) -> dict[tuple[str, str], list[dict]]:
         grouped.setdefault((acct, fund), []).append(row)
     wb.close()
     return grouped
+
+
+# ================================================================================================
+#  Umbrellas — one account, several borrowers, one certificate
+# ================================================================================================
+def umbrella_members(export: dict[tuple[str, str], list[dict]]) -> dict[str, tuple[str, ...]]:
+    """Account number -> the borrowers the export shares it between, for the umbrella accounts only.
+
+    Which accounts those are is read from the EXPORT rather than from the report, because the report
+    is free to print an umbrella either way — one row for the whole agreement or one row per member —
+    and only the export always states every fund that draws on it. Members keep export order."""
+    by_account: dict[str, list[str]] = {}
+    for acct, fund in export:
+        by_account.setdefault(acct, []).append(fund)
+    lo, hi = UMBRELLA_MEMBERS
+    return {a: tuple(m) for a, m in by_account.items() if lo <= len(m) <= hi}
+
+
+def common_name(names: list[str]) -> str:
+    """The leading words every name shares, in the first one's own casing.
+
+    Members of one umbrella are the sponsor's own family — a fund, its feeder, its offshore sleeve
+    and its SPV — so what their names have in common is the agreement's name, and what follows it is
+    what separates one member from the next. A trailing legal token is dropped: "Emberly Fund LP" and
+    "Emberly Fund Offshore" share "Emberly Fund", not "Emberly Fund LP"."""
+    split = [[t for t in name.replace(",", " ").split() if t] for name in names if name.strip()]
+    if not split:
+        return ""
+    stem: list[str] = []
+    for i in range(min(len(tokens) for tokens in split)):
+        token = split[0][i]
+        if any(tokens[i].casefold() != token.casefold() for tokens in split[1:]):
+            break
+        stem.append(token)
+    while stem and stem[-1].replace(".", "").lower() in LEGAL_TOKENS:
+        stem.pop()
+    return " ".join(stem)
+
+
+def umbrella_name(members: tuple[str, ...], printed: str = "") -> str:
+    """The borrower name the group's certificate carries.
+
+    It is the name common to the members, marked as the umbrella — the one name that is true of
+    every fund on the account and that a reader can find on both files. The account number is never
+    it: an account number names nothing, and the platform keys the group on it already, so a name
+    that only restates it leaves the group unnamed. Where the members share no name at all the
+    printed row's name is used, and failing that the first member's, so there is always one."""
+    stem = common_name(list(members))
+    if not stem:
+        stem = UMBRELLA_MARKER_RE.sub("", printed).strip() or " ".join(members[0].split()[:2])
+    if any(marker.casefold() in stem.casefold() for marker in UMBRELLA_MARKERS):
+        return stem
+    return f"{stem} {UMBRELLA_SUFFIX}"
+
+
+def member_label(member: str, fac: Facility) -> str:
+    """What separates one member from its siblings — its name with the group's shared stem removed.
+
+    This is what an agent writes on a per-fund tab of an umbrella's certificate: "Offshore X",
+    not the full name repeated on every sheet, which would truncate to the same 31 characters."""
+    stem = common_name(list(fac.members))
+    if stem and member.casefold().startswith(stem.casefold()):
+        return member[len(stem):].strip(" ,-") or member
+    return member
+
+
+def fold_umbrellas(facilities: list[Facility],
+                   members_by_account: dict[str, tuple[str, ...]]) -> list[Facility]:
+    """Replace every printed row on an umbrella account with ONE facility for the group.
+
+    The agent certifies the credit agreement once, so one file covers it however the report printed
+    it. The group takes the first printed row's dates and standing — they are the agreement's, and
+    every row on the account restates them — and the whole agreement's line: stated outright where
+    the report printed the group, and the sum of the members' shares where it printed them one by
+    one."""
+    folded: list[Facility] = []
+    seen: set[str] = set()
+    for fac in facilities:
+        members = members_by_account.get(fac.account)
+        if members is None:
+            folded.append(fac)
+            continue
+        if fac.account in seen:
+            continue                    # a further row on the account: the group already carries it
+        seen.add(fac.account)
+        printed = [f for f in facilities if f.account == fac.account]
+        folded.append(Facility(
+            agent=fac.agent,
+            borrower=umbrella_name(members, fac.borrower),
+            account=fac.account,
+            loan=fac.loan if len(printed) == 1 else _money(sum(f.loan for f in printed)),
+            maturity=fac.maturity,
+            status=fac.status,
+            status_date=fac.status_date,
+            bb_date=fac.bb_date,
+            members=members,
+        ))
+    return folded
 
 
 # ================================================================================================
@@ -575,20 +699,48 @@ def price_facility(fac: Facility, rng: random.Random) -> None:
         lp.pct_bb = _pct8(lp.bb / tot_bb)
 
 
+def _carry_block(rows: list[dict], rng: random.Random) -> tuple[list[AgentLp], int]:
+    """(the rows this block carries, how many it drops). A sample WITHOUT replacement, so a dropped
+    investor is dropped once and the survivors keep their export file order."""
+    total = len(rows)
+    keep_n = max(1, min(total, round(total * CARRY_RATE)))
+    return [agent_view(rng, rows[i]) for i in sorted(rng.sample(range(total), keep_n))], total - keep_n
+
+
+def stamp_members(fac: Facility) -> None:
+    """Name the borrower every row of an umbrella's certificate draws under.
+
+    A carried row states the fund the export booked it against; a minted one inherits the fund of the
+    row above it, so an investor the agent alone carries lands INSIDE a member's block rather than
+    splitting it, and the certificate keeps one contiguous block per borrower."""
+    if not fac.is_umbrella:
+        return
+    current = fac.members[0]
+    for lp in fac.lps:
+        if lp.carried:
+            current = str(lp.source.get("FndName") or "").strip() or current
+        lp.member = current
+
+
 def build_roster(fac: Facility, export_rows: list[dict], rng: random.Random,
                  minted_names: set[str]) -> None:
     """Fill the facility's LP roster: CARRY_RATE of the export's rows for it, the rest minted.
 
-    Row COUNT follows the export so the certificate is the same size as the position file; which
-    rows are dropped is a sample WITHOUT replacement, so a dropped investor is dropped once and the
-    survivors keep their export file order."""
+    Row COUNT follows the export so the certificate is the same size as the position file. An
+    umbrella carries at that rate per MEMBER rather than over the group, so no fund on the agreement
+    can be sampled away entirely — a certificate silently missing one of its borrowers is not a
+    smaller fixture, it is a different structure."""
     if export_rows:
-        total = len(export_rows)
-        keep_n = max(1, min(total, round(total * CARRY_RATE)))
-        keep_idx = sorted(rng.sample(range(total), keep_n))
-        carried = [agent_view(rng, export_rows[i]) for i in keep_idx]
+        blocks = ([[r for r in export_rows if str(r.get("FndName") or "").strip() == m]
+                   for m in fac.members] if fac.is_umbrella else [export_rows])
+        carried, new_n = [], 0
+        for block in blocks:
+            if not block:
+                continue
+            kept, dropped = _carry_block(block, rng)
+            carried += kept
+            new_n += dropped
         commit_scale = sum(lp.uncalled for lp in carried) / max(1, len(carried))
-        new_n = total - keep_n
     else:
         # A facility the report prints but the export cycle carried no positions for. The agent
         # still certifies it; every row on it is new to the bank.
@@ -606,6 +758,7 @@ def build_roster(fac: Facility, export_rows: list[dict], rng: random.Random,
     for lp in minted:
         roster.insert(rng.randint(0, len(roster)), lp)
     fac.lps = roster
+    stamp_members(fac)
 
 
 # ================================================================================================
@@ -929,6 +1082,10 @@ def write_summary_block(ws, first_row: int, fac: Facility, d: Dialect,
         ("Currency", "USD"),
         *extra,
     ]
+    if fac.is_umbrella:
+        # The funds that draw on the agreement. A certificate that covers the group has to name the
+        # borrowers it covers, or the only thing stating which funds are on the line is the export.
+        pairs += [("Borrowers" if i == 0 else "", m) for i, m in enumerate(fac.members)]
     row = first_row
     if d.summary_style == "paired":
         for i in range(0, len(pairs), 2):
@@ -969,6 +1126,30 @@ def split_sheets(lps: list[AgentLp], count: int) -> list[list[AgentLp]]:
     size = -(-len(lps) // count)
     blocks = [lps[i:i + size] for i in range(0, len(lps), size)]
     return [b for b in blocks if b] or [lps]
+
+
+def split_by_member(lps: list[AgentLp]) -> list[tuple[str, list[AgentLp]]]:
+    """(member, its rows) per block, for the forms that put one borrower on one sheet.
+
+    The roster is already contiguous by member, so the split is a walk. A member too thin to read as
+    a grid is folded into the block beside it rather than written to a sheet the analyzer would then
+    refuse — its rows stay on the certificate either way, under a neighbour's tab."""
+    blocks: list[tuple[str, list[AgentLp]]] = []
+    for lp in lps:
+        if blocks and blocks[-1][0] == lp.member:
+            blocks[-1][1].append(lp)
+        else:
+            blocks.append((lp.member, [lp]))
+    merged: list[tuple[str, list[AgentLp]]] = []
+    for name, rows in blocks:
+        if merged and len(rows) < MIN_ROWS_PER_SHEET:
+            merged[-1][1].extend(rows)
+        else:
+            merged.append((name, rows))
+    while len(merged) > 1 and len(merged[0][1]) < MIN_ROWS_PER_SHEET:
+        head = merged.pop(0)
+        merged[0][1][:0] = head[1]
+    return merged or [("", lps)]
 
 
 # ================================================================================================
@@ -1044,9 +1225,15 @@ def build_sleeved(fac: Facility, d: Dialect, rng: random.Random) -> openpyxl.Wor
     """Grouped, plus a Fund Sleeve column: one sheet covering every feeder of the borrower."""
     wb = _new_workbook()
     ws = wb.create_sheet(d.sheet_name[:31])
-    sleeves = rng.sample(SLEEVE_NAMES, rng.randint(2, 3))
-    for lp in fac.lps:
-        lp.sleeve = _pick(rng, sleeves)
+    # On an umbrella the sleeve column already has a truth to state — the borrower each row draws
+    # under — so the vehicles are not minted over it.
+    if fac.is_umbrella:
+        for lp in fac.lps:
+            lp.sleeve = lp.member
+    else:
+        sleeves = rng.sample(SLEEVE_NAMES, rng.randint(2, 3))
+        for lp in fac.lps:
+            lp.sleeve = _pick(rng, sleeves)
     ws.cell(2, d.start_col, f"{fac.borrower} {EM_DASH} Borrowing Base").font = TITLE_FONT
     row = write_summary_block(ws, 3, fac, d, extra=(
         ("Total Investors", len(fac.lps)),
@@ -1074,13 +1261,17 @@ def build_sleeved(fac: Facility, d: Dialect, rng: random.Random) -> openpyxl.Wor
 def build_feeders(fac: Facility, d: Dialect, rng: random.Random) -> openpyxl.Workbook:
     """One sheet per feeder vehicle, each its own small grid with its own total band."""
     wb = _new_workbook()
-    count = rng.randint(*d.sheet_count_range)
-    blocks = split_sheets(fac.lps, count)
-    sleeves = rng.sample(SLEEVE_NAMES, len(blocks))
-    for sleeve, block in zip(sleeves, blocks):
+    if fac.is_umbrella:
+        # One sheet per borrower on the agreement: on this form the per-vehicle tab is the shape the
+        # agent already uses, and an umbrella's vehicles are its member funds.
+        pairs = [(member_label(m, fac), block) for m, block in split_by_member(fac.lps)]
+    else:
+        blocks = split_sheets(fac.lps, rng.randint(*d.sheet_count_range))
+        pairs = list(zip(rng.sample(SLEEVE_NAMES, len(blocks)), blocks))
+    for sleeve, block in pairs:
         ws = wb.create_sheet(ILLEGAL_PATH_CHARS.sub("-", sleeve)[:31])
         for lp in block:
-            lp.sleeve = sleeve
+            lp.sleeve = lp.member or sleeve
         ws.cell(3, d.start_col, fac.borrower).font = TITLE_FONT
         ws.cell(3, d.start_col + 4, sleeve)
         header_row = 4 + d.title_gap + 2
@@ -1098,15 +1289,20 @@ def build_feeders(fac: Facility, d: Dialect, rng: random.Random) -> openpyxl.Wor
 def build_deals(fac: Facility, d: Dialect, rng: random.Random) -> openpyxl.Workbook:
     """One sheet per deal, each headed by a Deal Name / Borrowers block instead of a summary."""
     wb = _new_workbook()
-    count = rng.randint(*d.sheet_count_range)
-    blocks = split_sheets(fac.lps, count)
-    deals = rng.sample(DEAL_NAMES, len(blocks))
-    partnerships = [fac.borrower, f"{fac.borrower} (Cayman)"]
+    if fac.is_umbrella:
+        # This form already prints a Borrowers block and a partnership column, which is what an
+        # umbrella needs: the deal is the agreement, and its borrowers are the member funds.
+        pairs = [(member_label(m, fac), block) for m, block in split_by_member(fac.lps)]
+        partnerships = list(fac.members)
+    else:
+        blocks = split_sheets(fac.lps, rng.randint(*d.sheet_count_range))
+        pairs = list(zip(rng.sample(DEAL_NAMES, len(blocks)), blocks))
+        partnerships = [fac.borrower, f"{fac.borrower} (Cayman)"]
     ga = rng.randrange(60, 900)
-    for deal, block in zip(deals, blocks):
-        ws = wb.create_sheet(deal[:31])
+    for deal, block in pairs:
+        ws = wb.create_sheet(ILLEGAL_PATH_CHARS.sub("-", deal)[:31])
         for i, lp in enumerate(block):
-            lp.sleeve = _pick(rng, partnerships)
+            lp.sleeve = lp.member or _pick(rng, partnerships)
             lp.ga_id = f"GA-{ga + i:05d}"
             lp.transferred = "Y" if (not lp.carried and rng.random() < 0.3) else ""
         ga += len(block) + rng.randrange(1, 40)
@@ -1115,7 +1311,9 @@ def build_deals(fac: Facility, d: Dialect, rng: random.Random) -> openpyxl.Workb
         ws.cell(9, d.start_col, "Borrowers:").font = LABEL_FONT
         for i, p in enumerate(partnerships):
             ws.cell(9 + i, d.start_col + 1, p)
-        header_row = 13
+        # The grid clears the Borrowers block rather than sitting at a fixed row: an umbrella lists
+        # every fund on the agreement there, and a fixed header row would be written over them.
+        header_row = max(13, 9 + len(partnerships) + 1)
         write_header(ws, header_row, d)
         row = header_row + 1
         for lp in block:
@@ -1200,6 +1398,14 @@ def _abbreviate(borrower: str, style: str) -> str:
         parenthetical = f" ({m.group(1)})"
         core = f"{borrower[:m.start()]} {borrower[m.end():]}"
 
+    # The umbrella marker is held out the same way and re-attached whole: initialising it away would
+    # leave the one file on the tree that covers a whole credit agreement unmarked as one.
+    marker = ""
+    m = UMBRELLA_MARKER_RE.search(core)
+    if m:
+        marker = m.group(1)
+        core = core[:m.start()]
+
     tokens = [t for t in core.replace(",", " ").split() if t]
     while tokens and tokens[-1].replace(".", "").lower() in LEGAL_TOKENS:
         tokens.pop()
@@ -1217,7 +1423,7 @@ def _abbreviate(borrower: str, style: str) -> str:
     else:
         head = " ".join(tokens)
 
-    name = " ".join(filter(None, [head, " ".join(tail)])) + parenthetical
+    name = " ".join(filter(None, [head, " ".join(tail), marker])) + parenthetical
     if style == "dashed":
         name = re.sub(r"\s+", "-", name.strip())
     return name.strip()
@@ -1295,6 +1501,24 @@ def verify_divergence(fac: Facility) -> None:
             raise SystemExit(f"{fac.borrower} / {lp.name}: borrowing base identical to the export")
 
 
+def verify_umbrella(fac: Facility) -> None:
+    """A group's certificate must say it is one, and must carry every borrower on the agreement.
+
+    Both are what makes the file readable as an umbrella rather than as one more facility with an
+    unusually long roster: the name states the structure, and the roster states its extent. The
+    account number is checked out of the name for the same reason it is never put there — a name
+    that restates the key the group is already filed under tells a reader nothing."""
+    if not fac.is_umbrella:
+        return
+    if not any(marker.casefold() in fac.borrower.casefold() for marker in UMBRELLA_MARKERS):
+        raise SystemExit(f"{fac.borrower}: umbrella name carries none of {UMBRELLA_MARKERS}")
+    if fac.account and fac.account.casefold() in fac.borrower.casefold():
+        raise SystemExit(f"{fac.borrower}: umbrella named for its account number")
+    missing = [m for m in fac.members if m not in {lp.member for lp in fac.lps}]
+    if missing:
+        raise SystemExit(f"{fac.borrower}: certificate carries no rows for {missing}")
+
+
 def verify_parseable(analyzer: ExcelAnalyzer, path: Path, expected_tabs: int) -> Optional[str]:
     """Run the recognizer this generator writes for. Returns a complaint, or None when the workbook
     is one the directory crawler will turn into a template."""
@@ -1326,6 +1550,12 @@ def generate(out_root: Path, seed: int, agents: Optional[set[str]], limit: Optio
     export = load_export_rows(EXPORT_IN)
     logger.info(f"{len(facilities)} Active facility row(s), {len(export)} facility key(s) in the export")
 
+    umbrellas = umbrella_members(export)
+    facilities = fold_umbrellas(facilities, umbrellas)
+    if umbrellas:
+        logger.info(f"{len(umbrellas)} umbrella account(s): "
+                    + ", ".join(f"{a} ({len(m)} borrowers)" for a, m in umbrellas.items()))
+
     if agents:
         facilities = [f for f in facilities if f.agent in agents]
     if limit:
@@ -1338,10 +1568,19 @@ def generate(out_root: Path, seed: int, agents: Optional[set[str]], limit: Optio
     written = failed = 0
 
     for fac in facilities:
-        rows = export.get((fac.account, fac.borrower), [])
+        if fac.is_umbrella:
+            rows = [r for m in fac.members for r in export.get((fac.account, m), [])]
+        else:
+            rows = export.get((fac.account, fac.borrower), [])
         # The BB date is the export's own collateral date for this facility — the two files then
-        # describe the same run rather than two runs that happen to share a roster.
-        bb_date = _as_date(rows[0].get("BBDate")) if rows else None
+        # describe the same run rather than two runs that happen to share a roster. A group is
+        # certified once, on the LATEST of its members' dates: an agreement is not as of a date one
+        # of the funds on it has already moved past.
+        if fac.is_umbrella:
+            dates = [d for d in (_as_date(r.get("BBDate")) for r in rows) if d]
+            bb_date = max(dates) if dates else None
+        else:
+            bb_date = _as_date(rows[0].get("BBDate")) if rows else None
         fac.bb_date = bb_date or (fac.status_date or date.today())
 
         d = dialects.get(fac.agent) or build_dialect(fac.agent, seed)
@@ -1349,12 +1588,14 @@ def generate(out_root: Path, seed: int, agents: Optional[set[str]], limit: Optio
         rng = random.Random(_seed_of(seed, fac.agent, fac.account, fac.borrower))
 
         record = {"Agent": fac.agent, "Borrower": fac.borrower, "Layout": d.archetype,
-                  "LPs": "0", "Carried": "0", "File": "", "Status": "UNKNOWN", "Notes": ""}
+                  "LPs": "0", "Carried": "0", "File": "", "Status": "UNKNOWN",
+                  "Notes": f"umbrella of {len(fac.members)} borrowers" if fac.is_umbrella else ""}
         try:
             build_roster(fac, rows, rng, minted_names)
             price_facility(fac, rng)
             verify_reconciliation(fac)
             verify_divergence(fac)
+            verify_umbrella(fac)
 
             wb = BUILDERS[d.archetype](fac, d, rng)
             directory = out_root / ILLEGAL_PATH_CHARS.sub("-", fac.agent)

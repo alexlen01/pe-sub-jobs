@@ -6,8 +6,12 @@ public record FacilityRow(
         String accountNumber,
         String loanAmount,
         String maturityDate,
-        String bankStatus,
-        String bankStatusDate,
+        // The report's own FacilityStatus, as printed. Active/Inactive by the time it reaches here.
+        String status,
+        // The date that status was reported. Read only to hold the column's position — the platform
+        // records a facility's standing, not when the agent last restated it. Dropping the column
+        // outright would shift every column after it in feeds already in production.
+        String statusDate,
         String ubsParticipation,
         String collateralDate,
         // The umbrella subscription facility this fund borrows under, blank when it borrows alone.
@@ -21,12 +25,6 @@ public record FacilityRow(
         // carries is the same base. Blank where the feed cannot know, which is every group but the
         // sleeves of a multi-tranche facility.
         String umbrellaCrossCollateralized,
-        // Which sleeve of a multi-tranche facility this row is, and the facility it is a sleeve OF.
-        // Both blank on the ordinary facility. The feed states the relationship rather than the
-        // platform recovering it from a "(Committed)"/"(Uncommitted)" suffix, which finds only the
-        // sleeve names someone wrote a pattern for and misses a currency, term or accordion sleeve.
-        String trancheType,
-        String trancheOf,
         // The credit agreement this row's group is held under, where the agent prints a reference.
         // Last in the row on purpose: it is the newest column, and a feed written before it existed
         // still loads and still groups by its key exactly as it did.

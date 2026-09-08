@@ -64,14 +64,14 @@ SCRIPT_DIR = Path(__file__).resolve().parent          # pe-sub-jobs/scripts/
 DATA_DIR = SCRIPT_DIR.parent / "data"                 # pe-sub-jobs/data/
 REFERENCE_DIR = DATA_DIR / "reference"                # the same lists lp_db_extract normalizes against
 ABS_OUT = DATA_DIR / "import" / "AgentBankSummaryRpt.xlsx"
-EXPORT_OUT = DATA_DIR / "import" / "LP DB Export V2.xlsx"
+EXPORT_OUT = DATA_DIR / "import" / "LP DB Export V3.xlsx"
 SHEET_NAME = "BBs"
 ABS_SHEET_NAME = "Agent Bank Summary"
 
 # ── tunables ────────────────────────────────────────────────────────────────
-SEED = 20260831
+SEED = 20260908
 CHAOS_ENABLED = True            # degrade the written XLSX to realistic manual-entry quality
-CHAOS_SEED = 20260831           # chaos has its own rng: base data identical with chaos on/off
+CHAOS_SEED = 20260908           # chaos has its own rng: base data identical with chaos on/off
 TARGET_ROWS = 22_000            # lp_records to produce (mirrored tranche rows counted)
 REPEAT_MIN, REPEAT_MAX = 4, 12  # facilities each LP participates in
 

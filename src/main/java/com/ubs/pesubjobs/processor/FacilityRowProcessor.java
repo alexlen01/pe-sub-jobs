@@ -32,15 +32,12 @@ public class FacilityRowProcessor implements ItemProcessor<FacilityRow, Processe
                 blankToNull(item.accountNumber()),
                 parseDecimal(item.loanAmount()),
                 parseDate(item.maturityDate()),
-                blankToNull(item.bankStatus()),
-                parseDate(item.bankStatusDate()),
+                blankToNull(item.status()),
                 parseDecimal(item.ubsParticipation()),
                 parseDate(item.collateralDate()),
                 blankToNull(item.umbrellaName()),
                 blankToNull(item.umbrellaKey()),
                 parseBoolean(item.umbrellaCrossCollateralized()),
-                blankToNull(item.trancheType()),
-                blankToNull(item.trancheOf()),
                 blankToNull(item.agreementRef())
         );
     }

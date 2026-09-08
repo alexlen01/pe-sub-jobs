@@ -43,7 +43,7 @@ DATA_DIR = JOBS_ROOT / "data"
 #  EDIT THIS for each run — the LP DB Export to process. Absolute, or relative to pe-sub-jobs/.
 # ============================================================================================
 AGENT_BANK_SUMMARY_FILE = DATA_DIR / "import" / "AgentBankSummaryRpt.xlsx"
-EXPORT_FILE = DATA_DIR / "import" / "LP DB Export V2.xlsx"
+EXPORT_FILE = DATA_DIR / "import" / "LP DB Export V3.xlsx"
 REFERENCE_DIR = DATA_DIR / "reference"  # normalization lists
 OUT_DIR = DATA_DIR / "out"              # all outputs land here
 
@@ -67,7 +67,7 @@ SRC_COLS = [
     "Tranche", "TrancheOf",
     # The credit agreement's own reference. Optional for the same reason as the two above: no
     # export written to date carries it, and a column that is not there states nothing about any
-    # row. Where it IS carried it is what the facility's group resolves by - see FACILITY_COLS.
+    # row. Where it IS carried it is what the facility's group resolves by - see FACILITY_WORK_COLS.
     "AgreementRef",
 ]
 
@@ -241,26 +241,26 @@ SEED_COLS = [
     "ubs_concentration_limit", "ubs_advance_rate", "agent_excess_concentration",
     "ubs_excess_concentration", "agent_borrowing_base", "ubs_borrowing_base", "notes",
 ]
-FACILITY_COLS = [
-    "agent_bank", "name", "account_number", "loan_amount", "maturity_date", "bank_status",
-    "bank_status_date", "ubs_participation", "collateral_date", "umbrella_name",
+# The shape a facility row is BUILT in, which is wider than the shape it is FED in.
+#
+# tranche_type and tranche_of are working columns: which sleeve of a multi-tranche facility a row
+# is, and the facility it is a sleeve OF. They exist so assign_umbrellas can recognise a sleeve set
+# from a stated relationship rather than from a "(Committed)"/"(Uncommitted)" name suffix - a suffix
+# match finds exactly the sleeve names someone thought to write the pattern for and misses a
+# currency tranche, a term sleeve or an accordion, each of whose one borrowing base would then be
+# counted once per sleeve.
+#
+# They are NOT fed. The platform records a sleeve set as what it is: one cross-collateralized group
+# whose members are the sleeves, each carrying the whole shared base and reporting its allocated
+# share of it. Which sleeve is which is not a fact the platform holds, so stating it on the feed
+# would put a column in the contract that nothing on the far side reads.
+FACILITY_WORK_COLS = [
+    "agent_bank", "name", "account_number", "loan_amount", "maturity_date", "status",
+    # The date the agent last restated that status. Written to hold the column's position: the
+    # platform records a facility's standing, not when it was last restated, and dropping the column
+    # would shift every column after it in feeds already in production.
+    "status_date", "ubs_participation", "collateral_date", "umbrella_name",
     "umbrella_key", "cross_collateralized",
-    # ── the tranche declaration ──────────────────────────────────────────────────────────────
-    # Which sleeve of a multi-tranche facility this row is, and the facility it is a sleeve OF.
-    # Both blank on the ordinary facility, which is nearly every facility in the book.
-    #
-    # These two columns are the point of this phase. A multi-tranche facility is one borrower on
-    # one collateral pool, split by how much of the commitment is contractually firm, and the
-    # legacy feeds report each sleeve as a facility of its own because the agent certifies each
-    # separately. Until now the relationship between those rows was recovered downstream by
-    # stripping a "(Committed)"/"(Uncommitted)" suffix and comparing what was left - which finds
-    # exactly the two sleeve names anyone thought to write the pattern for, and silently misses a
-    # currency tranche, a term sleeve or an accordion.
-    #
-    # Stating it here moves the fact to where it is known and leaves nothing to infer. It is
-    # ADDITIVE: the columns are appended, so a reader written against the twelve-column feed is
-    # unaffected, and the cross_collateralized grouping this script already emits for a sleeve set
-    # is emitted exactly as before, so no figure the platform reports moves when this lands.
     "tranche_type", "tranche_of",
     # ── the agreement reference ──────────────────────────────────────────────────────────────
     # What the agreement is administered under, where either file prints it. This is the column
@@ -272,15 +272,18 @@ FACILITY_COLS = [
     # credit agreement into two groups - each with its own borrowing base and the collateral
     # counted twice. The reference does not move when the account does.
     #
-    # ADDITIVE in the same way the tranche columns are: appended, never inserted, and blank on
-    # every file written to date - so a run over the legacy book groups by account exactly as
-    # before, and not one figure the platform reports moves when this lands. The new key takes
-    # effect only where a file states a reference.
+    # ADDITIVE: appended, never inserted, and blank on every file written to date - so a run over
+    # the legacy book groups by account exactly as before, and not one figure the platform reports
+    # moves when this lands. The new key takes effect only where a file states a reference.
     "agreement_ref",
 ]
-TRANCHE_TYPE_COL = FACILITY_COLS.index("tranche_type")
-TRANCHE_OF_COL = FACILITY_COLS.index("tranche_of")
-AGREEMENT_REF_COL = FACILITY_COLS.index("agreement_ref")
+TRANCHE_TYPE_COL = FACILITY_WORK_COLS.index("tranche_type")
+TRANCHE_OF_COL = FACILITY_WORK_COLS.index("tranche_of")
+AGREEMENT_REF_COL = FACILITY_WORK_COLS.index("agreement_ref")
+
+# What actually goes out on the facility feed, and the columns of the working row it is taken from.
+FACILITY_COLS = [c for c in FACILITY_WORK_COLS if c not in ("tranche_type", "tranche_of")]
+FACILITY_EMIT_IDX = [FACILITY_WORK_COLS.index(c) for c in FACILITY_COLS]
 # The group layer, fed separately from its members. A group is not a facility - it has no LP roster
 # and no borrowing base of its own - so stating it on the member rows would repeat one credit
 # agreement's terms once per fund and leave whichever row loaded last holding them.
@@ -290,19 +293,18 @@ AGREEMENT_REF_COL = FACILITY_COLS.index("agreement_ref")
 # a borrowing base is certified against them; writing them here too would state one fact in two
 # places and leave a group that disagreed with its own members readable as either.
 UMBRELLA_COLS = [
-    "key", "name", "obligor_name", "agent_bank", "account_number", "loan_amount",
+    "key", "name", "agent_bank", "account_number", "loan_amount",
     "cross_collateralized",
-    # ── the agreement's own identity and terms ───────────────────────────────────────────────
     # agreement_ref is what the platform resolves the group by where it is stated, so a group
-    # survives its account being re-papered. The other three are terms of the agreement the report
-    # prints over a group and nowhere else: the entity that signed, the cap on one member's draw,
-    # and how the members answer for the debt (SEVERAL / JOINT_AND_SEVERAL / GUARANTEED).
+    # survives its account being re-papered. Blank means the file stated nothing, which the ingest
+    # reads as silence: it never clears a reference an analyst recorded.
     #
-    # Blank means the file stated nothing, which the ingest reads as silence: it never clears a
-    # term an analyst recorded. A liability reading in particular is a legal position - it is
-    # passed through as printed and refused by the API if unrecognised, never folded onto a
-    # neighbouring value to make it fit.
-    "agreement_ref", "borrower_entity", "sub_limit", "liability_type",
+    # obligor_name, borrower_entity, sub_limit and liability_type were written here and have been
+    # removed. None of the four appears in the Agent Bank Summary or the LP Data Export, none is an
+    # input to a Shadow BB, and no user asked for any of them - they were extracted from what a
+    # credit agreement contains rather than from what the platform is fed. A column nobody
+    # populates does not stay empty; it gets filled in by whoever assumes it must matter.
+    "agreement_ref",
 ]
 
 # One account number carrying MORE THAN ONE facility is an umbrella subscription facility: several
@@ -396,53 +398,6 @@ def legacy_sleeve_reading(name: str) -> "tuple[str, str] | None":
     return (tranche_type(m.group(1)), base) if base else None
 
 
-# ── the agreement's own terms ────────────────────────────────────────────────────────────────
-#
-# How the members of one credit agreement answer for the debt. The platform holds three readings
-# and no others, because each is a different legal position and there is no fourth that means
-# anything to a borrowing base:
-#
-#   SEVERAL            - each member answers for its own draw and no one else's.
-#   JOINT_AND_SEVERAL  - any member can be pursued for the whole, which is what makes the members'
-#                        collateral one pool rather than several.
-#   GUARANTEED         - a third party stands behind the members' obligations.
-#
-# The spellings a document uses for the same position are folded onto them. Anything else is
-# passed through UPPER-CASED rather than dropped or approximated: the platform refuses a reading it
-# does not hold and names the row, which puts the question back to whoever wrote the file. Folding
-# an unfamiliar phrase onto a neighbouring value would record a legal position nobody stated - and
-# it is the difference between one pooled base and several separate ones.
-LIABILITY_TYPE_ALIASES = {
-    "several": "SEVERAL", "several liability": "SEVERAL", "severally": "SEVERAL",
-    "joint and several": "JOINT_AND_SEVERAL", "joint several": "JOINT_AND_SEVERAL",
-    "j s": "JOINT_AND_SEVERAL", "joint and several liability": "JOINT_AND_SEVERAL",
-    "guaranteed": "GUARANTEED", "guarantee": "GUARANTEED", "guaranty": "GUARANTEED",
-}
-
-
-def liability_type(value) -> str:
-    """One stated liability reading, folded onto the platform's vocabulary. Blank stays blank."""
-    raw = as_is(value).strip()
-    if not raw:
-        return ""
-    return LIABILITY_TYPE_ALIASES.get(_norm(raw), raw.upper().replace(" ", "_"))
-
-
-@dataclass
-class AgreementTerms:
-    """What a report row states about the AGREEMENT rather than about a facility.
-
-    Carried separately from the facility row because these are group-level facts: stamping them on
-    each member would state one agreement's terms once per fund and leave whichever row loaded last
-    holding them. Every field is blank where the report printed no such column, which is every
-    report written to date."""
-    borrower_entity: str = ""
-    sub_limit: str = ""
-    liability_type: str = ""
-
-    def any(self) -> bool:
-        return bool(self.borrower_entity or self.sub_limit or self.liability_type)
-
 # Agent Bank Summary column layout (must match the report header exactly). Index 4 is an unnamed
 # spacer holding the report's subtotal amounts.
 ABS_COLS = [
@@ -456,16 +411,9 @@ ABS_COLS = [
 # written to date; see OPTIONAL_COLS for why that is read as "states nothing" rather than as an
 # error.
 ABS_OPTIONAL_HEADERS = {
-    # The agreement reference, and the three terms an agent prints over a GROUP row rather than
-    # over a fund: who signed, the per-member cap, and how the members answer for the debt. The
-    # last three are read only off a row that turns out to be a group row (see StatedGroup);
-    # printed over a single facility they describe that facility's own agreement, which the
-    # platform records on the facility, not on a group that does not exist.
+    # The agreement reference an agent prints over a GROUP row rather than over a fund.
     "AgreementRef":   ["Agreement Ref", "AgreementRef", "Agreement Reference", "Agreement ID",
                        "AgreementID", "Deal ID", "DealID", "Facility ID", "FacilityID"],
-    "BorrowerEntity": ["Borrower Entity", "BorrowerEntity", "Obligor Entity", "Signing Entity"],
-    "SubLimit":       ["Sub Limit", "SubLimit", "Sublimit", "Member Sublimit", "Borrower Sublimit"],
-    "LiabilityType":  ["Liability Type", "LiabilityType", "Liability", "Recourse Type"],
     "Tranche":   ["Tranche", "Tranche Type", "TrancheType", "Sleeve", "Sleeve Type"],
     "TrancheOf": ["Tranche Of", "TrancheOf", "Parent Facility", "ParentFacility",
                   "Credit Agreement", "Facility Group"],
@@ -950,7 +898,7 @@ def read_export(path: Path, sheet: str | None = None) -> list[dict]:
 
 
 def read_agent_bank_summary(path: Path) -> tuple[list[list[str]], dict[str, int]]:
-    """Read the Agent Bank Summary report into FACILITY_COLS-shaped rows.
+    """Read the Agent Bank Summary report into FACILITY_WORK_COLS-shaped rows.
     Returns (rows, account_number -> row index).
 
     The report is a banded print layout, not a flat table:
@@ -994,11 +942,6 @@ def read_agent_bank_summary(path: Path) -> tuple[list[list[str]], dict[str, int]
             abs_optional_at.setdefault(col, i)
 
     data: list[list[str]] = []
-    # The agreement terms a row states, kept by ROW INDEX rather than by account: only a row that
-    # turns out to be a GROUP row states them about an agreement, and which row that is is decided
-    # later, by upsert_facilities. Keying by account here would attribute a term printed over one
-    # fund to the whole agreement.
-    terms: dict[int, AgreementTerms] = {}
     by_acct: "OrderedDict[str, list[tuple[int, str]]]" = OrderedDict()
     seen_pair: set[tuple[str, str]] = set()
     agent = ""
@@ -1037,15 +980,11 @@ def read_agent_bank_summary(path: Path) -> tuple[list[list[str]], dict[str, int]
         data.append([text[0] or agent or "Unknown", name, acct, text[3], iso_date(cells[5]),
                      text[6], iso_date(cells[7]), "", "", "", "", "",
                      tranche_type(_opt("Tranche")), _opt("TrancheOf"), _opt("AgreementRef")])
-        stated_terms = AgreementTerms(_opt("BorrowerEntity"), _opt("SubLimit"),
-                                      liability_type(_opt("LiabilityType")))
-        if stated_terms.any():
-            terms[len(data) - 1] = stated_terms
         # Every borrower on the account, in report order: an account listed against two borrowers
         # is two facilities and both stay eligible for the LP join.
         by_acct.setdefault(acct, []).append((len(data) - 1, printed))
 
-    return data, by_acct, terms
+    return data, by_acct
 
 
 def facility_key(row: dict) -> tuple[str, str]:
@@ -1285,18 +1224,14 @@ class StatedGroup:
     maturity_date: str
     bank_status: str         # as printed; normalised by the caller
     bank_status_date: str
-    # The agreement's own identity and terms, where the report printed them over the group row.
-    # Blank on a report that printed only the eight standard columns, which is every report to
-    # date - and blank is what the ingest reads as "not stated".
+    # The agreement's own reference, where the report printed it over the group row. Blank on a
+    # report that printed only the eight standard columns, which is every report to date - and
+    # blank is what the ingest reads as "not stated".
     agreement_ref: str = ""
-    borrower_entity: str = ""
-    sub_limit: str = ""
-    liability_type: str = ""
 
 
 def upsert_facilities(fac_data: list[list[str]], by_acct: dict[str, list[tuple[int, str]]],
-                      export: list[dict],
-                      terms: "dict[int, AgreementTerms] | None" = None
+                      export: list[dict]
                       ) -> tuple[list[list[str]], dict[tuple[str, str], str],
                                  dict[str, StatedGroup]]:
     """Facilities from the Agent Bank Summary, joined to the export by (AccountID, FndName).
@@ -1378,7 +1313,6 @@ def upsert_facilities(fac_data: list[list[str]], by_acct: dict[str, list[tuple[i
     for key in bbdate_by_key:
         keys_by_acct.setdefault(key[0], []).append(key)
 
-    terms = terms or {}
     claimed: dict[tuple[str, str], int] = {}
     groups: dict[str, StatedGroup] = {}
     group_rows: set[int] = set()
@@ -1393,16 +1327,11 @@ def upsert_facilities(fac_data: list[list[str]], by_acct: dict[str, list[tuple[i
         if len(keys) > 1 and len(free) == 1 and free[0][1] not in {k[1] for k in keys}:
             idx = free.pop(0)[0]
             cells = out[idx]
-            # The row promoted to a group is where the agreement's own terms were printed, if the
-            # report printed any: they are read off THIS row and no other, so a term stated over one
-            # member fund is never read as the agreement's.
-            stated_terms = terms.get(idx, AgreementTerms())
+            # The reference is read off THIS row and no other, so one stated over a single member
+            # fund is never read as the whole agreement's.
             groups[acct] = StatedGroup(acct, cells[1], cells[0], cells[3], cells[4],
                                        cells[5], cells[6],
-                                       agreement_ref=cells[AGREEMENT_REF_COL].strip(),
-                                       borrower_entity=stated_terms.borrower_entity,
-                                       sub_limit=stated_terms.sub_limit,
-                                       liability_type=stated_terms.liability_type)
+                                       agreement_ref=cells[AGREEMENT_REF_COL].strip())
             group_rows.add(idx)
         for key in keys:                            # pass 1 - exact FndName == Borrower
             if not key[1]:
@@ -1532,17 +1461,13 @@ class UmbrellaGroup:
     cross_collateralized: bool  # True only where the members demonstrably stand on ONE base
     # What the report states about the AGREEMENT, present only where it printed a group row. Blank
     # on a group this script inferred from a shared account number, which states nothing of itself.
-    obligor_name: str = ""
     agent_bank: str = ""
     account_number: str = ""
     loan_amount: str = ""
-    # The agreement's own reference, and the terms the report printed over the group row. The
-    # reference is what the platform resolves this group by where it is stated - the key above is
-    # then the account, or the sleeves' shared base name, and is only a fallback.
+    # The agreement's own reference, where the report printed it over the group row. It is what the
+    # platform resolves this group by where it is stated - the key above is then the account, or the
+    # sleeves' shared base name, and is only a fallback.
     agreement_ref: str = ""
-    borrower_entity: str = ""
-    sub_limit: str = ""
-    liability_type: str = ""
 
 
 def assign_umbrellas(rows: list[list[str]],
@@ -1682,15 +1607,11 @@ def assign_umbrellas(rows: list[list[str]],
         accounts = {rows[i][2].strip() for i in idxs}
         groups.append(UmbrellaGroup(
             ref, name, [rows[i][1] for i in idxs], False,
-            obligor_name=printed.name if printed is not None else "",
             agent_bank=(printed.agent_bank if printed is not None and printed.agent_bank
                         else rows[idxs[0]][0]),
             account_number=accounts.pop() if len(accounts) == 1 else "",
             loan_amount=printed.loan_amount if printed is not None else "",
-            agreement_ref=ref,
-            borrower_entity=printed.borrower_entity if printed is not None else "",
-            sub_limit=printed.sub_limit if printed is not None else "",
-            liability_type=printed.liability_type if printed is not None else ""))
+            agreement_ref=ref))
 
     # Then account umbrellas, over whatever neither pass claimed.
     by_acct: "OrderedDict[str, list[int]]" = OrderedDict()
@@ -1718,9 +1639,6 @@ def assign_umbrellas(rows: list[list[str]],
             rows[i][11] = ""
         groups.append(UmbrellaGroup(
             acct, name, [rows[i][1] for i in idxs], False,
-            # The obligor is the printed Borrower: on a group row the agent names the entity that
-            # signs and draws, which is precisely what the platform records as the obligor.
-            obligor_name=printed.name if printed is not None else "",
             agent_bank=printed.agent_bank if printed is not None else rows[idxs[0]][0],
             account_number=acct,
             # The whole agreement's line, which is a group-level figure: it is stated once, over
@@ -1731,10 +1649,7 @@ def assign_umbrellas(rows: list[list[str]],
             # now is. Reached where fewer than two members stated the reference outright - a group
             # row that states one over members that do not, most often.
             agreement_ref=(printed.agreement_ref if printed is not None and printed.agreement_ref
-                           else agreed_ref(idxs)),
-            borrower_entity=printed.borrower_entity if printed is not None else "",
-            sub_limit=printed.sub_limit if printed is not None else "",
-            liability_type=printed.liability_type if printed is not None else ""))
+                           else agreed_ref(idxs))))
 
     return groups
 
@@ -1753,8 +1668,10 @@ def write_facilities(path: Path, rows: list[list[str]]) -> None:
         w.writerow(FACILITY_COLS)
         for r in rows:
             # Padded as well as trimmed: a short row would write a ragged line the ingest reads
-            # one column out of step from the header.
-            w.writerow((r + [""] * len(FACILITY_COLS))[: len(FACILITY_COLS)])
+            # one column out of step from the header. Then projected onto the fed columns, which
+            # drops the working ones the grouping used and the platform does not hold.
+            padded = (r + [""] * len(FACILITY_WORK_COLS))[: len(FACILITY_WORK_COLS)]
+            w.writerow([padded[i] for i in FACILITY_EMIT_IDX])
 
 
 def write_umbrellas(path: Path, groups: list[UmbrellaGroup]) -> None:
@@ -1764,9 +1681,9 @@ def write_umbrellas(path: Path, groups: list[UmbrellaGroup]) -> None:
         w = csv.writer(fh, quoting=csv.QUOTE_ALL)
         w.writerow(UMBRELLA_COLS)
         for g in groups:
-            w.writerow([g.key, g.name, g.obligor_name, g.agent_bank, g.account_number,
+            w.writerow([g.key, g.name, g.agent_bank, g.account_number,
                         g.loan_amount, "true" if g.cross_collateralized else "",
-                        g.agreement_ref, g.borrower_entity, g.sub_limit, g.liability_type])
+                        g.agreement_ref])
 
 
 def main() -> int:
@@ -1778,13 +1695,12 @@ def main() -> int:
 
     ref = load_references(ref_dir)
     # Small file first, so a missing/renamed report fails before the big export is parsed.
-    fac_data, by_acct, abs_terms = read_agent_bank_summary(abs_path)
+    fac_data, by_acct = read_agent_bank_summary(abs_path)
     export = read_export(export_path)
 
     # Facilities first: manufactures placeholders for orphan accounts and returns the
     # account -> facility name map the seed uses, so every LP record resolves to a facility.
-    fac_rows, name_by_key, stated_groups = upsert_facilities(
-        fac_data, by_acct, export, abs_terms)
+    fac_rows, name_by_key, stated_groups = upsert_facilities(fac_data, by_acct, export)
     # After the names are final, so the umbrella reports the members under the names the platform
     # will know them by rather than the ones the report printed.
     umbrellas = assign_umbrellas(fac_rows, stated_groups)
@@ -1860,12 +1776,11 @@ def main() -> int:
             print(f"  {g.name:<40}: {', '.join(g.members)}")
         if len(accounts) > 20:
             print(f"  ... and {len(accounts) - 20} more")
-        named = [g for g in accounts if g.obligor_name]
+        named = [g for g in accounts if g.loan_amount]
         if named:
             print(f"  {len(named)} of them {'is' if len(named) == 1 else 'are'} printed at GROUP "
-                  "level - the report names the "
-                  "obligor and states the agreement's terms, and none of its member funds. Those "
-                  "terms are fed as the umbrella; the funds come from the export.")
+                  "level - the report states the agreement's own line and none of its member "
+                  "funds. That line is fed as the umbrella's; the funds come from the export.")
         print("  cross-collateralization is a term of the credit agreement, is stated by neither "
               "source file, and is left for an analyst to set")
 

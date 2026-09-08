@@ -67,21 +67,16 @@ public class UmbrellaIngestJobConfig {
                 .resource(new FileSystemResource(filePath))
                 .linesToSkip(1)
                 .lineTokenizer(CsvLineTokenizers.lenientQuotedCsvTokenizer(
-                        "key", "name", "obligorName", "agentBank", "accountNumber",
-                        "loanAmount", "crossCollateralized",
-                        "agreementRef", "borrowerEntity", "subLimit", "liabilityType"))
+                        "key", "name", "agentBank", "accountNumber",
+                        "loanAmount", "crossCollateralized", "agreementRef"))
                 .fieldSetMapper(fs -> new UmbrellaRow(
                         fs.readString("key"),
                         fs.readString("name"),
-                        fs.readString("obligorName"),
                         fs.readString("agentBank"),
                         fs.readString("accountNumber"),
                         fs.readString("loanAmount"),
                         fs.readString("crossCollateralized"),
-                        fs.readString("agreementRef"),
-                        fs.readString("borrowerEntity"),
-                        fs.readString("subLimit"),
-                        fs.readString("liabilityType")
+                        fs.readString("agreementRef")
                 ))
                 .build();
     }

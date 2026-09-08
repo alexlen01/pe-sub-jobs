@@ -61,33 +61,30 @@ public class FacilityIngestJobConfig {
                 .name("facilityReader")
                 .resource(new FileSystemResource(filePath))
                 .linesToSkip(1)
-                // The umbrella columns, then the tranche declaration, then the agreement reference
-                // are last, and the tokenizer is lenient, so a feed written before any of them
-                // existed still loads: its rows simply state no umbrella, or state one without a key
-                // or a shared borrowing base, or state no tranche, or state no agreement reference,
-                // and the API falls back in each case. New columns are appended, never inserted —
-                // an insert would shift every column after it in feeds already in production.
+                // The umbrella columns and then the agreement reference are last, and the tokenizer
+                // is lenient, so a feed written before either existed still loads: its rows simply
+                // state no umbrella, or state one without a key or a shared borrowing base, or state
+                // no agreement reference, and the API falls back in each case. New columns are
+                // appended, never inserted — an insert would shift every column after it in feeds
+                // already in production.
                 .lineTokenizer(CsvLineTokenizers.lenientQuotedCsvTokenizer(
                         "agentBank", "name", "accountNumber", "loanAmount",
-                        "maturityDate", "bankStatus", "bankStatusDate",
+                        "maturityDate", "status", "statusDate",
                         "ubsParticipation", "collateralDate", "umbrellaName",
-                        "umbrellaKey", "umbrellaCrossCollateralized",
-                        "trancheType", "trancheOf", "agreementRef"))
+                        "umbrellaKey", "umbrellaCrossCollateralized", "agreementRef"))
                 .fieldSetMapper(fs -> new FacilityRow(
                         fs.readString("agentBank"),
                         fs.readString("name"),
                         fs.readString("accountNumber"),
                         fs.readString("loanAmount"),
                         fs.readString("maturityDate"),
-                        fs.readString("bankStatus"),
-                        fs.readString("bankStatusDate"),
+                        fs.readString("status"),
+                        fs.readString("statusDate"),
                         fs.readString("ubsParticipation"),
                         fs.readString("collateralDate"),
                         fs.readString("umbrellaName"),
                         fs.readString("umbrellaKey"),
                         fs.readString("umbrellaCrossCollateralized"),
-                        fs.readString("trancheType"),
-                        fs.readString("trancheOf"),
                         fs.readString("agreementRef")
                 ))
                 .build();

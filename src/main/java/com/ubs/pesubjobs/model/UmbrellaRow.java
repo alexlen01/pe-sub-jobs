@@ -15,10 +15,10 @@ public record UmbrellaRow(
         String key,
         // The name to onboard the group under, used on creation only.
         String name,
-        // The entity that signs and draws, where the report names it. Blank on a group inferred
-        // from a shared account number, which the report states nothing about of itself.
-        String obligorName,
         String agentBank,
+        // The number the group is administered under. Assigned by the PE Sub team, not issued by the
+        // agent bank — the extract writes it through from the LP database, not from the agent's own
+        // report.
         String accountNumber,
         // The whole agreement's line, as printed over the group.
         String loanAmount,
@@ -28,11 +28,5 @@ public record UmbrellaRow(
         // The credit agreement's own reference, where the agent prints one. What the API groups on
         // in preference to the account number, because an account is how a bank administers an
         // agreement and can be re-papered, whereas the reference is the agreement.
-        String agreementRef,
-        // The entity that signed, the cap on a single member's draw, and how the members answer for
-        // the debt (SEVERAL, JOINT_AND_SEVERAL or GUARANTEED). Terms of the agreement: stated only
-        // where the agent prints them, and blank never clears what an analyst recorded.
-        String borrowerEntity,
-        String subLimit,
-        String liabilityType
+        String agreementRef
 ) {}

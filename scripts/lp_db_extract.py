@@ -62,12 +62,13 @@ SRC_COLS = [
     "PercentOfCommitments", "Called", "PercentOfUncalled", "CalledPercent",
     "AgentExcessConc", "UBSExcessConc", "AgentBB", "UBSBB", "Notes", "BBDate",
     # The two columns that let a multi-tranche facility STATE that it is one, rather than leaving
-    # the platform to recover it from a naming habit. Both optional, so today's V2 workbook - which
-    # carries neither - parses unchanged and reads exactly as it does now.
+    # a reader to recover it from a naming habit. Both optional, so today's V2 workbook - which
+    # carries neither - parses unchanged. Neither groups anything (see assign_umbrellas); they are
+    # carried so the run report can name the sleeve sets a user has to relate in the platform.
     "Tranche", "TrancheOf",
     # The credit agreement's own reference. Optional for the same reason as the two above: no
     # export written to date carries it, and a column that is not there states nothing about any
-    # row. Where it IS carried it is what the facility's group resolves by - see FACILITY_WORK_COLS.
+    # row. Carried to the platform as the evidence a user relates facilities by - never grouped on.
     "AgreementRef",
 ]
 
@@ -83,7 +84,7 @@ SRC_COLS = [
 #
 # Tranche and TrancheOf are optional for a third reason: no export written to date carries either.
 # They are the columns the format is expected to gain for multi-tranche support, and reading them
-# now means the day one arrives it is used rather than ignored. Until then every workbook states
+# now means the day one arrives it is reported rather than ignored. Until then every workbook states
 # nothing about tranching and the legacy sleeve-suffix reading fills the gap (see
 # legacy_sleeve_reading).
 OPTIONAL_COLS = {"AgentAR", "Region", "InvestorType", "Tranche", "TrancheOf", "AgreementRef"}
@@ -142,9 +143,10 @@ SRC_HEADERS = {
     "Tranche":              ["Tranche", "Tranche Type", "TrancheType", "Facility Tranche",
                              "Sleeve", "Sleeve Type"],
     # The facility the sleeve belongs to - the credit agreement's own facility, named once and
-    # shared by every sleeve of it. This is the reference that replaces matching a name suffix: a
-    # currency tranche, a term sleeve or an accordion states its parent here and groups correctly
-    # however it is named, which a suffix match cannot do.
+    # shared by every sleeve of it. Read in preference to matching a name suffix: a currency
+    # tranche, a term sleeve or an accordion states its parent here and is reported as the sleeve
+    # set it is however it is named, which a suffix match cannot do. It relates nothing on its own -
+    # the sleeves hold their own account numbers, and a user relates them in the platform.
     "TrancheOf":            ["Tranche Of", "TrancheOf", "Parent Facility", "ParentFacility",
                              "Facility", "Credit Agreement", "Facility Group"],
     # The reference the credit agreement is administered under - a deal number, a CUSIP-like
@@ -244,16 +246,15 @@ SEED_COLS = [
 # The shape a facility row is BUILT in, which is wider than the shape it is FED in.
 #
 # tranche_type and tranche_of are working columns: which sleeve of a multi-tranche facility a row
-# is, and the facility it is a sleeve OF. They exist so assign_umbrellas can recognise a sleeve set
-# from a stated relationship rather than from a "(Committed)"/"(Uncommitted)" name suffix - a suffix
-# match finds exactly the sleeve names someone thought to write the pattern for and misses a
-# currency tranche, a term sleeve or an accordion, each of whose one borrowing base would then be
-# counted once per sleeve.
+# is, and the facility it is a sleeve OF, as either file states it or as the legacy
+# "(Committed)"/"(Uncommitted)" suffix spells it. They no longer GROUP anything - grouping is by
+# account number alone, see assign_umbrellas - and they are kept for one purpose: the run report
+# lists the sleeve sets it did not group, so whoever maps them in the platform is told they are
+# there rather than left to find them.
 #
-# They are NOT fed. The platform records a sleeve set as what it is: one cross-collateralized group
-# whose members are the sleeves, each carrying the whole shared base and reporting its allocated
-# share of it. Which sleeve is which is not a fact the platform holds, so stating it on the feed
-# would put a column in the contract that nothing on the far side reads.
+# They are NOT fed. Which sleeve is which is not a fact the platform holds, and a sleeve set is
+# related in the platform by a person, so stating it on the feed would put a column in the contract
+# that nothing on the far side reads.
 FACILITY_WORK_COLS = [
     "agent_bank", "name", "account_number", "loan_amount", "maturity_date", "status",
     # The date the agent last restated that status. Written to hold the column's position: the
@@ -263,18 +264,17 @@ FACILITY_WORK_COLS = [
     "umbrella_key", "cross_collateralized",
     "tranche_type", "tranche_of",
     # ── the agreement reference ──────────────────────────────────────────────────────────────
-    # What the agreement is administered under, where either file prints it. This is the column
-    # the group now resolves by, ahead of the account number, and it is here rather than only on
-    # the group feed because it is the facility row that says which agreement a facility is under.
+    # What the agreement is administered under, where either file prints it - carried through to
+    # the platform because it is the best evidence a person has when relating two facilities by
+    # hand, and stamped on a group where its members agree on one.
     #
-    # An account number is how a BANK administers an agreement: it can be re-papered, split across
-    # two systems after a merger, or reissued, and every one of those events used to split one
-    # credit agreement into two groups - each with its own borrowing base and the collateral
-    # counted twice. The reference does not move when the account does.
+    # It does NOT group facilities that hold their own account numbers. An agent re-papers a
+    # reference on a renewal, quotes the wrong one, or prints one reference over two agreements a
+    # merger left it administering; acting on it would move a facility's whole borrowing base into
+    # a pool on this script's reading of a string. Two accounts under one reference are related in
+    # the platform, by a user, and the reference is what they read to do it.
     #
-    # ADDITIVE: appended, never inserted, and blank on every file written to date - so a run over
-    # the legacy book groups by account exactly as before, and not one figure the platform reports
-    # moves when this lands. The new key takes effect only where a file states a reference.
+    # ADDITIVE: appended, never inserted, and blank on every file written to date.
     "agreement_ref",
 ]
 TRANCHE_TYPE_COL = FACILITY_WORK_COLS.index("tranche_type")
@@ -338,25 +338,24 @@ UMBRELLA_NAME_PREFIX = "Umbrella "
 #
 # Reported as one sleeve per tranche, because the sleeves are the SAME borrower on the SAME
 # collateral, split by how much of the commitment is contractually firm - so the agent certifies
-# each separately and gives each its own account number. That is why they cannot be found the way
-# an account umbrella is found: the sleeves of one facility never share an account.
+# each separately and gives each ITS OWN ACCOUNT NUMBER. "<Fund> (Committed)" beside "<Fund>
+# (Uncommitted)", Tranche A beside Tranche B.
 #
-# A tranche set stands on ONE borrowing base by construction - one borrower, one LP roster, one
-# collateral pool - so unlike an account umbrella this script CAN state cross-collateralization
-# for it, and does. Without it the platform would report the same base once per sleeve and count
-# the collateral twice over.
+# THIS SCRIPT DOES NOT GROUP THEM, and that is a decision rather than an omission. Every signal
+# available here is circumstantial: a name suffix someone typed, or an agreement reference an agent
+# re-papers on renewal and mis-quotes often enough to matter. Grouping on either moves a facility's
+# entire borrowing base under an allocated share of a collateral pool it may not be part of, and
+# does it silently, over a whole book at a time. Two facilities holding two account numbers are two
+# facilities here; relating them is a decision, it is made by a user in the platform, and it is
+# recorded there as one.
 #
-# WHAT IS DECLARED AND WHAT IS INFERRED. The relationship is now read from the feed's own
-# `Tranche` / `TrancheOf` columns wherever they are stated. Only where they are not does the
-# reading below apply, and its ONLY job is to fill those same two columns, so there is one
-# mechanism downstream instead of two: the grouping in assign_umbrellas reads the declaration and
-# nothing else. That is what retires the old suffix-driven grouping - the pattern no longer
-# decides anything, it supplies a default for a column the format is expected to carry.
+# What this section still does is READ the evidence, so the platform's user is handed it rather
+# than left to notice. `Tranche` / `TrancheOf` are taken from either file wherever they state them,
+# the legacy sleeve suffix fills them where neither does, and the run report lists what came out -
+# the sets someone has to map, named, at the end of every run.
 #
-# The pattern is kept rather than deleted because every workbook written to date names its sleeves
-# this way, and retention of the legacy book is a hard requirement: dropping the reading would
-# leave every historical sleeve set ungrouped and its one borrowing base counted once per sleeve -
-# the exact double count this line of work exists to remove.
+# A shared ACCOUNT NUMBER is the one relationship that is grouped, in assign_umbrellas: it is not
+# an inference at all, but the agent's own statement that these funds draw on one agreement.
 
 # Canonical tranche types, matching the platform's own vocabulary (tranches.tranche_type). The
 # spellings an agent's system uses for the same thing are folded onto them; anything unrecognised
@@ -386,11 +385,11 @@ def tranche_type(value) -> str:
 def legacy_sleeve_reading(name: str) -> "tuple[str, str] | None":
     """(tranche_type, tranche_of) recovered from a legacy sleeve name, or None where it is not one.
 
-    Applied only to a facility whose feed states no tranche of its own. The suffix is what makes a
-    name a sleeve of something larger; a name without one is a whole facility and is never folded
-    into a tranche set on a base-name match alone. "Fund X" standing beside "Fund X (Committed)" is
-    a separate credit agreement until someone says otherwise, and grouping the two would put a full
-    facility's borrowing base under an allocated share of a pool it is not part of."""
+    Applied only to a facility whose feed states no tranche of its own, and the result groups
+    nothing: it fills two columns the run report reads back out, so a sleeve set the export names
+    only by suffix is still reported to whoever maps it. The suffix is what makes a name a sleeve of
+    something larger; a name without one is a whole facility, and "Fund X" standing beside "Fund X
+    (Committed)" is a separate credit agreement until someone says otherwise."""
     m = LEGACY_SLEEVE_SUFFIX_RE.search(name or "")
     if not m:
         return None
@@ -1454,11 +1453,18 @@ def upsert_facilities(fac_data: list[list[str]], by_acct: dict[str, list[tuple[i
 
 @dataclass
 class UmbrellaGroup:
-    """One credit agreement covering more than one facility row, as this run found it."""
-    key: str                    # what the ingest resolves the group by - stable across runs
+    """One account number carrying more than one facility, as this run found it.
+
+    That shared account is the agent's own statement that these funds draw on one credit agreement,
+    and it is the only relationship this script groups on - see assign_umbrellas for what it
+    deliberately leaves to a user."""
+    key: str                    # the account number the members share - what the ingest resolves by
     name: str                   # the report's, where it states one; minted otherwise
     members: list[str]          # member facility names, in run order
-    cross_collateralized: bool  # True only where the members demonstrably stand on ONE base
+    # Whether the members stand on ONE borrowing base. Never set here: it is a term of the credit
+    # agreement, neither source file states it, and it is an analyst's to record. The field is kept
+    # because the group feed carries the column, and False writes it blank.
+    cross_collateralized: bool
     # What the report states about the AGREEMENT, present only where it printed a group row. Blank
     # on a group this script inferred from a shared account number, which states nothing of itself.
     agent_bank: str = ""
@@ -1475,15 +1481,18 @@ def assign_umbrellas(rows: list[list[str]],
     """Stamp `umbrella_name`, `umbrella_key` and `cross_collateralized` on every facility that
     belongs to a group, and return the groups for the run report.
 
-    Two shapes of group are found, and they are found differently:
+    ONE relationship groups, and it is not an inference: several facilities reported against the
+    SAME ACCOUNT NUMBER are an umbrella subscription facility - separate funds, feeders or SPVs
+    borrowing under one credit agreement, which is why the agent administers them on a single
+    account. Each member keeps its own LP roster and its own borrowing base; the umbrella is the
+    layer above them.
 
-      * a TRANCHE SET - sleeves of one multi-tranche facility, recognised by the facility each of
-        them declares it is a sleeve of (`tranche_of`, settled by upsert_facilities). One borrower
-        on one collateral pool, so the group is marked cross-collateralized and the platform
-        allocates the shared base across the sleeves instead of counting it once per sleeve.
-      * an ACCOUNT UMBRELLA - separate funds, feeders or SPVs borrowing under one credit agreement,
-        which the agent reports against a single account number. Each member keeps its own LP
-        roster and its own borrowing base.
+    Facilities holding their OWN account numbers are never grouped here, however plainly they read
+    as one agreement - the sleeves of a multi-tranche facility, or two accounts an agent prints one
+    agreement reference over. The evidence for those is a name suffix or a reference that gets
+    re-papered, and acting on it would move a whole borrowing base into a pool on a string match.
+    They are reported at the end of the run and related in the platform, by a user, as the decision
+    it is. That is why nothing below reads `tranche_of` or groups on `agreement_ref`.
 
     Runs over the FINAL facility rows - the reported ones and the manufactured placeholders
     together - because a group is a fact about the credit agreement, and a member the report omits
@@ -1498,19 +1507,13 @@ def assign_umbrellas(rows: list[list[str]],
     that name IS the credit agreement's; the account-number form is the fallback for a report that
     named no group, not the preferred answer.
 
-    Tranche sets are claimed first and their members are then withheld from account grouping, so no
-    facility lands in two groups. The sleeves are the tighter and better-evidenced structure: they
-    share collateral, where account members merely share paperwork. An account left with one
-    unclaimed member does not form - correctly, since it no longer groups anything.
-
-    Cross-collateralization is deliberately NOT inferred for an account umbrella. Whether its
-    members' commitments support one common borrowing base is a term of the credit agreement;
-    neither source file states it, and a guess would read downstream as the legal position. The
-    column is left blank, which the ingest reads as "not stated" and never as "no".
+    Cross-collateralization is deliberately NOT inferred. Whether an account's members' commitments
+    support one common borrowing base is a term of the credit agreement; neither source file states
+    it, and a guess would read downstream as the legal position. The column is left blank, which the
+    ingest reads as "not stated" and never as "no".
     """
     stated = stated or {}
     taken_names = {_norm(row[1]) for row in rows}
-    claimed: set[int] = set()
     groups: list[UmbrellaGroup] = []
 
     def agreed_ref(idxs: list[int]) -> str:
@@ -1519,114 +1522,26 @@ def assign_umbrellas(rows: list[list[str]],
         Blank where they disagree, and deliberately so: two references over one group is a
         contradiction in the file, and picking either would resolve the group onto an agreement
         half its members were never said to be under. Blank leaves the group resolving by its key,
-        which is what it did before any reference was stated, and the disagreement stays visible in
-        the facility rows."""
+        which is the account number, and the disagreement stays visible in the facility rows."""
         refs = {rows[i][AGREEMENT_REF_COL].strip() for i in idxs}
         refs.discard("")
         return refs.pop() if len(refs) == 1 else ""
 
-    # Tranche sets first, keyed on the facility each sleeve DECLARES it is a sleeve of, through
-    # _norm(). The declaration is what upsert_facilities settled on the row - the report's column,
-    # the export's, or the legacy sleeve reading where neither file states one - so this pass reads
-    # one field and never a name pattern. A sleeve set named in a way no pattern anticipates groups
-    # correctly the moment the feed states its parent, which is the whole point of the column.
-    #
-    # Normalising is what absorbs the spelling drift. The sleeves are typed by hand into the agent's
-    # system one at a time, so a pair reaches the file spelt the same way only by habit -
-    # "MERRIDEN OPPORTUNITIES FUND V" beside "Merriden Opportunities Fund V" is one credit
-    # agreement whichever way the shift key fell, and matching literally would leave that pair
-    # ungrouped and its one borrowing base counted twice.
-    #
-    # The normalized form is also what the group is KEYED by, so the key holds still when a later
-    # run receives the same pair spelt differently. Keying on whichever spelling this run happened
-    # to read first would resolve to a different group next time and build a duplicate beside it.
-    by_base: "OrderedDict[str, list[int]]" = OrderedDict()
-    for i, row in enumerate(rows):
-        base = row[TRANCHE_OF_COL].strip()
-        if base:
-            by_base.setdefault(_norm(base), []).append(i)
-
-    for key, idxs in by_base.items():
-        if len(idxs) < 2:
-            continue  # a lone sleeve is just a facility; there is nothing to relate it to
-        # The declared parent IS the credit agreement's name, so it is used as-is - unless a
-        # facility of its own already answers to it, in which case the group takes the prefixed
-        # form to keep the two apart on screen. Taken from the first sleeve, since the key is
-        # normalized and the analyst should read the agreement's name as the file spells it, not
-        # folded flat.
-        base = rows[idxs[0]][TRANCHE_OF_COL].strip() or key
-        name = base if key not in taken_names else f"{UMBRELLA_NAME_PREFIX}{base}"
-        for i in idxs:
-            rows[i][9] = name
-            rows[i][10] = key
-            rows[i][11] = "true"
-            claimed.add(i)
-        # The sleeves hold an account number each, so the set records none of them as the group's,
-        # and the report prints no row above them - the agent bank is the one they agree on.
-        groups.append(UmbrellaGroup(key, name, [rows[i][1] for i in idxs], True,
-                                    agent_bank=rows[idxs[0]][0],
-                                    agreement_ref=agreed_ref(idxs)))
-
-    # Then the AGREEMENT REFERENCE, over whatever the tranche pass did not claim. This is the key
-    # the grouping now turns on, and it sits ahead of the account number because it is the better
-    # evidence: a reference identifies the agreement itself, where an account identifies how one
-    # bank happens to administer it. Two accounts under one reference are ONE credit agreement -
-    # grouped by account they were two, each carrying its own borrowing base, and the same
-    # collateral was reported twice.
-    #
-    # It sits BEHIND the tranche pass for the same reason the account pass does: sleeves share
-    # collateral, which is the tighter fact, and a sleeve set already resolved is not re-cut here.
-    #
-    # A reference stated over a single facility groups nothing - there is nothing to relate it to -
-    # and that facility falls through to the account pass with its reference still on its row, so
-    # the platform stamps it on whatever group the account forms.
-    by_ref: "OrderedDict[str, list[int]]" = OrderedDict()
-    for i, row in enumerate(rows):
-        ref = row[AGREEMENT_REF_COL].strip()
-        if ref and i not in claimed:
-            by_ref.setdefault(ref, []).append(i)
-
-    for ref, idxs in by_ref.items():
-        if len(idxs) < 2:
-            continue
-        # The report's printed group row for whichever account these rows are on, where there is
-        # one: the agent's own name for the agreement beats a name minted from its reference.
-        printed = next((stated[a] for a in
-                        (rows[i][2].strip() for i in idxs) if a in stated), None)
-        base = printed.name if printed is not None and printed.name else ref
-        name = base if _norm(base) not in taken_names else f"{UMBRELLA_NAME_PREFIX}{base}"
-        for i in idxs:
-            rows[i][9] = name
-            rows[i][10] = ref
-            # Not inferred here either. Members under one reference share paperwork; whether they
-            # stand on ONE borrowing base is a term of that paperwork, and no file states it.
-            rows[i][11] = ""
-            claimed.add(i)
-        # The account is recorded only where every member is on the same one - which is exactly not
-        # the case this pass exists to handle.
-        accounts = {rows[i][2].strip() for i in idxs}
-        groups.append(UmbrellaGroup(
-            ref, name, [rows[i][1] for i in idxs], False,
-            agent_bank=(printed.agent_bank if printed is not None and printed.agent_bank
-                        else rows[idxs[0]][0]),
-            account_number=accounts.pop() if len(accounts) == 1 else "",
-            loan_amount=printed.loan_amount if printed is not None else "",
-            agreement_ref=ref))
-
-    # Then account umbrellas, over whatever neither pass claimed.
+    # Account umbrellas, in the order the facilities were built, so a group is named and
+    # reported from the first row that stated it whichever run reads the file.
     by_acct: "OrderedDict[str, list[int]]" = OrderedDict()
     for i, row in enumerate(rows):
         acct = row[2].strip()
-        if acct and i not in claimed:
+        if acct:
             by_acct.setdefault(acct, []).append(i)
 
     for acct, idxs in by_acct.items():
         if len(idxs) < 2:
             continue
         printed = stated.get(acct)
-        # The printed name unless a facility of its own already answers to it, exactly as a tranche
-        # set's base name is treated: the two must stay apart on screen, and the group is the one
-        # that yields, since the facility's name is what its LP records resolve by.
+        # The printed name unless a facility of its own already answers to it: the two must stay
+        # apart on screen, and the group is the one that yields, since the facility's name is what
+        # its LP records resolve by.
         if printed is not None and printed.name and _norm(printed.name) not in taken_names:
             name = printed.name
         elif printed is not None and printed.name:
@@ -1644,10 +1559,9 @@ def assign_umbrellas(rows: list[list[str]],
             # The whole agreement's line, which is a group-level figure: it is stated once, over
             # every member fund, and no member borrows it alone.
             loan_amount=printed.loan_amount if printed is not None else "",
-            # A group whose members all name one agreement carries it, so the platform resolves the
-            # group by the reference from here on and the account number becomes the fallback it
-            # now is. Reached where fewer than two members stated the reference outright - a group
-            # row that states one over members that do not, most often.
+            # The reference the group's members agree on, carried so the platform holds what the
+            # agent stated about the agreement. The group still resolves by its account number:
+            # the reference is evidence for a person, not a key this script groups on.
             agreement_ref=(printed.agreement_ref if printed is not None and printed.agreement_ref
                            else agreed_ref(idxs))))
 
@@ -1751,38 +1665,52 @@ def main() -> int:
     print(f"export facilities      : {len(name_by_key)} "
           f"(distinct AccountID+FndName pairs over {len({k[0] for k in name_by_key})} accounts)")
 
-    # A credit agreement covering more than one facility is reported rather than failed: it is a
-    # normal structure, not a data fault. Members keep their own LP records - a group groups them,
-    # it does not merge them. Tranche sets and account umbrellas are listed apart because they
-    # differ in the one thing that changes the numbers: whether the members share a borrowing base.
-    tranches = [g for g in umbrellas if g.cross_collateralized]
-    accounts = [g for g in umbrellas if not g.cross_collateralized]
-    if tranches:
+    # An account carrying more than one facility is reported rather than failed: it is a normal
+    # structure, not a data fault. Members keep their own LP records - a group groups them, it does
+    # not merge them.
+    if umbrellas:
         print()
-        print(f"multi-tranche facilities: {len(tranches)} facility(ies) are reported as more than "
-              "one tranche; each is fed as one cross-collateralized group and its sleeves as "
-              "members")
-        for g in tranches[:20]:
-            print(f"  {g.name:<40}: {', '.join(g.members)}")
-        if len(tranches) > 20:
-            print(f"  ... and {len(tranches) - 20} more")
-        print("  the sleeves stand on ONE borrowing base, so the platform allocates that base "
-              "across them pro rata to commitment rather than counting it once per sleeve")
-    if accounts:
-        print()
-        print(f"umbrella facilities    : {len(accounts)} account(s) carry more than one facility; "
+        print(f"umbrella facilities    : {len(umbrellas)} account(s) carry more than one facility; "
               "each is fed as one umbrella and its funds as members")
-        for g in accounts[:20]:
+        for g in umbrellas[:20]:
             print(f"  {g.name:<40}: {', '.join(g.members)}")
-        if len(accounts) > 20:
-            print(f"  ... and {len(accounts) - 20} more")
-        named = [g for g in accounts if g.loan_amount]
+        if len(umbrellas) > 20:
+            print(f"  ... and {len(umbrellas) - 20} more")
+        named = [g for g in umbrellas if g.loan_amount]
         if named:
             print(f"  {len(named)} of them {'is' if len(named) == 1 else 'are'} printed at GROUP "
                   "level - the report states the agreement's own line and none of its member "
                   "funds. That line is fed as the umbrella's; the funds come from the export.")
         print("  cross-collateralization is a term of the credit agreement, is stated by neither "
               "source file, and is left for an analyst to set")
+
+    # What this run did NOT group, and hands to a user instead. Facilities holding their own
+    # account numbers are never related here (see assign_umbrellas), so the sleeve sets and the
+    # shared agreement references are listed by name: they are exactly the mapping work the
+    # platform is now expecting someone to do, and an unlisted one is one nobody knows about.
+    sleeve_sets: "OrderedDict[str, list[str]]" = OrderedDict()
+    for r in fac_rows:
+        parent = r[TRANCHE_OF_COL].strip()
+        if parent and not r[9].strip():             # declared a sleeve, and grouped by no account
+            sleeve_sets.setdefault(_norm(parent), []).append(
+                f"{r[1]}{f' [{r[TRANCHE_TYPE_COL]}]' if r[TRANCHE_TYPE_COL] else ''}")
+    ref_sets: "OrderedDict[str, set[str]]" = OrderedDict()
+    for r in fac_rows:
+        ref = r[AGREEMENT_REF_COL].strip()
+        if ref:
+            ref_sets.setdefault(ref, set()).add(r[2].strip())
+    multi_ref = {ref: accts for ref, accts in ref_sets.items() if len(accts) > 1}
+    if sleeve_sets or multi_ref:
+        print()
+        print("left to map manually   : facilities that read as one credit agreement but hold "
+              "their OWN account numbers. This script does not group them - the evidence is a name "
+              "suffix or a re-papered reference - so they are related in the platform, by a user.")
+    for parent, sleeves in list(sleeve_sets.items())[:20]:
+        if len(sleeves) > 1:
+            print(f"  tranche sleeves        : {', '.join(sleeves)}")
+    if multi_ref:
+        for ref, accts in list(multi_ref.items())[:20]:
+            print(f"  agreement {ref:<12}: accounts {', '.join(sorted(accts))}")
 
     # Normalization outcomes. These are not failures - the value is written through unchanged - but
     # a non-zero count means a reference list is behind the feed and should be topped up.

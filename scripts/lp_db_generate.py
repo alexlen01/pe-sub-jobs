@@ -10,10 +10,11 @@ pair does: every account number, borrower name and loan amount in the export is 
 prints for that facility, the export's BB date falls inside the facility's own reported life, and
 each facility's LP pool is apportioned from the loan amount printed beside it. The two deliberate
 disagreements are ORPHAN_ACCOUNTS - positions on accounts the report omits, which is what keeps the
-ingestion's "Unknown agent" path exercised - and GROUP_UMBRELLAS, an account the report prints ONCE
-under the name of the obligor that signs the credit agreement, with the funds borrowing beneath it
-appearing in the export alone. Everything else the export writes - about 99% of its records at the
-default settings - joins to a facility the report prints.
+ingestion's "Unknown agent" path exercised - and GROUP_UMBRELLAS, the accounts the report prints
+ONCE under the credit agreement's own name, marked "Umbrella" or "[U]" and carrying the stem its
+member funds' names share, with the funds borrowing beneath it appearing in the export alone.
+Everything else the export writes - about 99% of its records at the default settings - joins to a
+facility the report prints.
 
 The roster itself is MINTED rather than transcribed: build_roster() draws the agents, borrowers,
 accounts, amounts and dates from ROSTER_SEED, so the sample states no real institution's book of
@@ -72,7 +73,7 @@ ABS_SHEET_NAME = "Agent Bank Summary"
 SEED = 20260908
 CHAOS_ENABLED = True            # degrade the written XLSX to realistic manual-entry quality
 CHAOS_SEED = 20260908           # chaos has its own rng: base data identical with chaos on/off
-TARGET_ROWS = 22_000            # lp_records to produce (mirrored tranche rows counted)
+TARGET_ROWS = 20_000            # lp_records to produce (mirrored tranche rows counted)
 REPEAT_MIN, REPEAT_MAX = 4, 12  # facilities each LP participates in
 
 # A subscription line is drawn against uncalled capital, so a facility's LP pool is sized FROM its
@@ -94,21 +95,43 @@ DEFAULT_LOAN_AMOUNT = 140_000_000   # orphan accounts: the summary report does n
 # account. One fund on several accounts, which is the shape the printed report's own orphans take:
 # separate credit agreements that must never be grouped as an umbrella.
 ORPHAN_COUNT = 2
-# The umbrella as the agent actually prints it: ONE row for the account, naming the obligor that
-# signs the credit agreement, with the funds that borrow beneath it named only by the export. The
-# real file states 5VZ8873 as "Carlyle Buyout Umbrella" and the export puts six Carlyle funds on it.
-# This is a different shape from _unit_umbrella, which prints every member, and it is the shape that
-# decides whether a report row with no fund to match is read as the GROUP it names or handed to
-# whichever member the export happens to list first.
-GROUP_UMBRELLA_MEMBERS = 6
-AS_OF = date(2026, 6, 25)       # the sample's as-of date: no BB run is dated after it
-# How far after a facility's reported FacilityStatusDate its most recent BB run may fall. The
-# export's BBDate is not a free-floating date: a borrowing base is certified against a LIVE
-# facility, so it sits between the date the agent last stated the facility's status and the date the
-# facility matures. Drawing it in that window is what makes the collateral date the extract lifts
-# out of the export agree with the facility the report describes, instead of dating a BB run before
-# the facility was reported or after it had already matured.
-BBDATE_MAX_LAG_DAYS = 240
+# The umbrella as the agent actually prints it: ONE row for the account, naming the credit
+# agreement, with the funds that borrow beneath it named only by the export. The real file states
+# 5VZ8873 as "Carlyle Buyout Umbrella" and the export puts six Carlyle funds on it. This is a
+# different shape from _unit_umbrella, which prints every member, and it is the shape that decides
+# whether a report row with no fund to match is read as the GROUP it names or handed to whichever
+# member the export happens to list first.
+#
+# The printed row is named for what its members' names have in COMMON, marked as the umbrella it is:
+# that name is the one thing true of every fund on the account, and it is what lets a reader of
+# either file see that the export's several rows and the report's one row are the same agreement.
+# It is never named for the account number, which names nothing either file could look up.
+#
+# Several groups are minted rather than one. A single group proves the shape is handled; it does not
+# show what an account carrying an umbrella looks like beside the next one, and the platform's
+# grouping is exercised per account.
+GROUP_UMBRELLA_COUNT = 3
+GROUP_UMBRELLA_MEMBERS = (4, 6)
+# The two spellings the printed report marks an umbrella with. Both are minted in every run: a
+# reader that only recognised one would pass here and miss half the umbrellas the bank sends.
+UMBRELLA_MARKERS = ("Umbrella", "[U]")
+UMBRELLA_MARKER_RE = re.compile(r"\s*(Umbrella|\[U\])\s*$", re.I)
+# The sample's as-of date: no BB run is dated after it, no facility has matured before it, and
+# every facility's last reported status falls within STATUS_MAX_AGE_DAYS of it. It is a constant
+# rather than date.today() because the same SEED has to reproduce the same pair; bump it when the
+# sample starts reading as stale.
+AS_OF = date(2026, 8, 31)
+STATUS_MAX_AGE_DAYS = 150       # how long ago the agent may last have reported a facility
+# An Active facility has not matured. The window is the ordinary remaining life of a subscription
+# line: a few months out for one coming up for renewal, three and a half years for one just signed.
+MATURITY_MIN_AHEAD_DAYS, MATURITY_MAX_AHEAD_DAYS = 45, 1275
+# How STALE the most recent BB run may be. The export's BBDate is not a free-floating date: a
+# borrowing base is certified against a LIVE facility, so it sits between the date the agent last
+# stated the facility's status and the date the facility matures. It is also the collateral date the
+# extract lifts onto the facility row and the platform reports as "as of", so a run dated a year
+# back reads as a stale book rather than as a current one - the window therefore ENDS at the sample's
+# as-of date and reaches back this far, never further, and never before the facility was reported.
+BBDATE_RECENCY_DAYS = 120
 
 # The 32 headers of the V2 LP DB Export, in order, EXACTLY as the real file spells them —
 # quirks included, because reproducing them is most of the point of this generator: "LP Size" and
@@ -229,7 +252,8 @@ ABS_SUBTOTAL_FORMULA = {
 ROSTER_SEED = 20260831          # the roster draws from its own rng, so the population holds still
                                 # when SEED, CHAOS_SEED or TARGET_ROWS are changed
 ROSTER_AGENTS = (25, 35)        # agent groups the report prints
-ROSTER_FACILITIES = 150         # facility ROWS the report prints. Reprints collapse on the way in,
+ROSTER_FACILITIES = 70          # facility ROWS the report prints, and the Active facility count
+                                # the report therefore states. Reprints collapse on the way in,
                                 # so the export sees slightly fewer distinct facilities, plus
                                 # ORPHAN_COUNT more that the report never printed. It is a floor: a
                                 # population too small to hold one of every structure gets one
@@ -436,13 +460,18 @@ def _facility_dates(rng: random.Random) -> tuple[str, str]:
     """(maturity, facility status date) for one facility, as ISO dates.
 
     The status date is when the agent last reported the facility, so it is never in the future of
-    the sample's own as-of date; the maturity is one to three years past it. Together they are the
-    window facility_bbdate draws the export's BB run inside, which is what keeps the collateral date
-    the extract lifts out of the export describing the facility the report prints. A facility
-    maturing within the next few months is left in rather than pushed out: the printed report has
-    those, and they are the ones whose BB window is tightest."""
-    status = AS_OF - timedelta(days=rng.randint(14, 380))
-    maturity = status + timedelta(days=rng.randint(300, 1150))
+    the sample's own as-of date and never much behind it either: a report is a current statement of
+    a book of business, and a facility last reported two years ago is not one the agent is still
+    lending against. The maturity is drawn AHEAD of the as-of date, because every facility this
+    roster prints is reported Active and a matured facility is not active - the report used to
+    print both, which put a live borrowing base on a line that had already run off.
+
+    Together they are the window facility_bbdate draws the export's BB run inside, which is what
+    keeps the collateral date the extract lifts out of the export describing the facility the report
+    prints. A facility maturing within the next few months is left in rather than pushed out: the
+    printed report has those, and they are the ones whose BB window is tightest."""
+    status = AS_OF - timedelta(days=rng.randint(7, STATUS_MAX_AGE_DAYS))
+    maturity = AS_OF + timedelta(days=rng.randint(MATURITY_MIN_AHEAD_DAYS, MATURITY_MAX_AHEAD_DAYS))
     return maturity.isoformat(), status.isoformat()
 
 
@@ -544,23 +573,38 @@ class GroupUmbrella:
 
 
 def _unit_group_umbrella(rng: random.Random, accts: set[str], names: set[str],
-                         members: int) -> tuple[list[tuple], GroupUmbrella]:
+                         members: int, marker: str) -> tuple[list[tuple], GroupUmbrella]:
     """(the report's one row, the group it stands for).
 
     The agent reports the CREDIT AGREEMENT here, not the funds: one row, one account, the whole
-    line, named for the obligor that signed it. The funds that draw on it reach the platform only
-    through the export, which is why the report row has no fund name to match and why handing it to
-    a member is a data loss rather than a near miss - the member takes the agreement's name and its
-    entire line, and its siblings, being unprinted, land as Unknown/Inactive placeholders.
+    line, named for the agreement itself. The funds that draw on it reach the platform only through
+    the export, which is why the report row has no fund name to match and why handing it to a member
+    is a data loss rather than a near miss - the member takes the agreement's name and its entire
+    line, and its siblings, being unprinted, land as Unknown/Inactive placeholders.
+
+    The printed name is the stem the member funds' names have in COMMON, plus the marker that says
+    it is an umbrella - "Ridgeline Direct Lending Umbrella" over "Ridgeline Direct Lending Fund
+    VII", "... Feeder VII", "... SPV". Nothing else would let a reader tie the report's one row to
+    the export's several: the funds are named by the export alone, so the common stem is the only
+    name both files carry, and the marker is what says the row stands for a group rather than for a
+    fund of its own. It is deliberately minted WITHOUT a series designation or a legal suffix, both
+    of which belong to a fund and not to the agreement that covers several of them.
 
     The line is split across the members rather than repeated, so the funds' positions still
     apportion out of the amount the report prints for the account."""
     acct = _mint_account(rng, accts)
-    sponsor = _mint_sponsor(rng)
-    strategy = rng.choice(FUND_STRATEGIES)
     maturity, status_date = _facility_dates(rng)
     loan = _loan_amount(rng)
-    obligor = _mint_name(rng, names, sponsor=sponsor, strategy=f"{strategy} Umbrella", damage=False)
+    for _ in range(400):
+        sponsor = _mint_sponsor(rng)
+        strategy = rng.choice(FUND_STRATEGIES)
+        obligor = f"{sponsor} {strategy} {marker}"
+        if _norm(obligor) not in names and _norm(f"{sponsor} {strategy}") not in names:
+            names.add(_norm(obligor))
+            break
+    else:
+        raise SystemExit("build_roster could not mint a unique umbrella name: widen the name "
+                         "vocabulary or lower GROUP_UMBRELLA_COUNT")
 
     weights = [rng.uniform(0.5, 2.0) for _ in range(members)]
     total = sum(weights)
@@ -654,12 +698,18 @@ def build_roster() -> tuple[list[tuple], list[tuple[str, str]], list[GroupUmbrel
         members = 3 if umbrella_rows >= 3 and rng.random() < 0.4 else 2
         units.append(_unit_umbrella(rng, accts, names, members))
         umbrella_rows -= members
-    # Floored at one per roster rather than drawn to a share: it is a single printed row, so a rate
-    # would round it away on most populations, and a roster without it renders and extracts
-    # perfectly while quietly no longer proving that a report row naming a group is read as one.
-    group_rows, group = _unit_group_umbrella(rng, accts, names, GROUP_UMBRELLA_MEMBERS)
-    units.append(group_rows)
-    umbrella_groups = [group]
+    # Counted rather than drawn to a share: each is a single printed row, so a rate would round
+    # them away on most populations, and a roster without one renders and extracts perfectly while
+    # quietly no longer proving that a report row naming a group is read as one. The markers are
+    # dealt round-robin so both spellings the report uses are minted in every run, whatever
+    # GROUP_UMBRELLA_COUNT is set to.
+    umbrella_groups = []
+    for i in range(GROUP_UMBRELLA_COUNT):
+        group_rows, group = _unit_group_umbrella(
+            rng, accts, names, rng.randint(*GROUP_UMBRELLA_MEMBERS),
+            UMBRELLA_MARKERS[i % len(UMBRELLA_MARKERS)])
+        units.append(group_rows)
+        umbrella_groups.append(group)
     units += [_unit_plain(rng, accts, names)
               for _ in range(max(0, ROSTER_FACILITIES - sum(len(u) for u in units)))]
 
@@ -1490,6 +1540,12 @@ def load_facilities() -> list[tuple[str, str, int, str | None, str | None]]:
     return out
 
 
+def _umbrella_stem(obligor: str) -> str:
+    """An umbrella row's printed name with its marker taken off - the stem it shares with the funds
+    beneath it, which is what ties the report's one row to the export's several."""
+    return UMBRELLA_MARKER_RE.sub("", _as_str(obligor)).strip()
+
+
 def validate_roster() -> None:
     """Assert the roster can be rendered as the report AND used as the export's facility list,
     BEFORE anything is written.
@@ -1558,9 +1614,17 @@ def validate_roster() -> None:
     # obligor must be printed, must be alone on its account, and must not be a facility in the
     # export - any of those failing turns it back into an ordinary umbrella and stops it proving
     # that an unmatched row on a multi-fund account is read as the group it names.
-    if not GROUP_UMBRELLAS:
-        problems.append("the roster states no group-level umbrella, so nothing proves an Agent Bank "
-                        "Summary row naming an obligor rather than a fund is read as a group")
+    if len(GROUP_UMBRELLAS) < 2:
+        problems.append(f"the roster states {len(GROUP_UMBRELLAS)} group-level umbrella(s); the "
+                        "sample carries several, so an account under one is seen beside the next "
+                        "rather than as the one special case in the file")
+    marker_spellings = {marker for marker in UMBRELLA_MARKERS
+                        for g in GROUP_UMBRELLAS if _norm(marker) in _norm(g.obligor)}
+    if len(marker_spellings) < len(UMBRELLA_MARKERS):
+        problems.append("the roster marks its umbrellas "
+                        f"{sorted(marker_spellings)} only - a reader that recognised one spelling "
+                        f"and not the other(s) in {list(UMBRELLA_MARKERS)} would pass on this "
+                        "sample and miss umbrellas on the report the bank sends")
     for group in GROUP_UMBRELLAS:
         if (group.account, _norm(group.obligor)) not in printed:
             problems.append(f"group umbrella {group.obligor!r} ({group.account}) is not printed by "
@@ -1572,6 +1636,20 @@ def validate_roster() -> None:
         if len(group.members) < 2:
             problems.append(f"group umbrella {group.obligor!r} states {len(group.members)} member "
                             "fund(s) - one fund on an account is an ordinary rename, not a group")
+        # The printed row's whole job is to be findable from the export's rows and vice versa. It
+        # is findable only if it says (a) that it is an umbrella, in a spelling the report uses,
+        # and (b) which funds it covers, by carrying the stem their names share. A row failing
+        # either is a name that appears in one file and nowhere in the other.
+        if not any(_norm(marker) in _norm(group.obligor) for marker in UMBRELLA_MARKERS):
+            problems.append(f"group umbrella {group.obligor!r} ({group.account}) is marked with "
+                            f"none of {list(UMBRELLA_MARKERS)}, so the report's row does not say "
+                            "it stands for a group rather than for a fund")
+        stem = _umbrella_stem(group.obligor)
+        unrelated = [fund for fund, _share in group.members
+                     if not _norm(fund).startswith(_norm(stem) + " ")]
+        if not stem or unrelated:
+            problems.append(f"group umbrella {group.obligor!r} ({group.account}) does not carry the "
+                            f"name its member funds share: {unrelated or 'it has no stem at all'}")
         for fund, share in group.members:
             if (group.account, _norm(fund)) in printed:
                 problems.append(f"member fund {fund!r} ({group.account}) is printed by the report, "
@@ -1753,16 +1831,18 @@ def facility_bbdate(maturity: str | None, status_date: str | None, latest: date)
 
     A borrowing base is certified against a live facility, so the run is drawn between the date the
     agent last reported the facility's status and the earlier of its maturity and the sample's own
-    as-of date. A facility the report does not state - an orphan - has no such window and falls
-    back to the sample's own trailing year. Two funds on one account are two facilities running
-    their own BBs, so they date separately."""
+    as-of date - and, within that, no further back than BBDATE_RECENCY_DAYS, so the collateral date
+    the platform reports as "as of" is a current one rather than a year-old certificate that happens
+    to satisfy the facility's life. A facility the report does not state - an orphan - has no such
+    window and falls back to the same trailing period. Two funds on one account are two facilities
+    running their own BBs, so they date separately."""
     if status_date and maturity:
-        start = date.fromisoformat(status_date)
         end = min(date.fromisoformat(maturity), latest)
-        span = max(0, min((end - start).days, BBDATE_MAX_LAG_DAYS))
+        start = max(date.fromisoformat(status_date), end - timedelta(days=BBDATE_RECENCY_DAYS))
+        span = max(0, (end - start).days)
         d = start + timedelta(days=random.randint(0, span))
     else:
-        d = latest - timedelta(days=random.randint(0, BBDATE_MAX_LAG_DAYS))
+        d = latest - timedelta(days=random.randint(0, BBDATE_RECENCY_DAYS))
     return f"{d.month}/{d.day}/{d.year}"
 
 

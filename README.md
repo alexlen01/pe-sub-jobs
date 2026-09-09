@@ -36,8 +36,10 @@ Requests without the `SERVICE` role fail with `403`.
 
 - Endpoint: `POST /jobs/umbrella-ingest`
 - Feed target: `POST /api/umbrellas/ingest`
-- Upserts by group key: the account number where the members share one, the credit agreement where
-  they hold one each. A group renamed by an analyst keeps that name across re-runs.
+- Upserts by group key: the account number the members share, which is the only relationship the
+  extract groups on. Facilities holding their own account numbers — tranche sleeves, or two accounts
+  under one agreement reference — are fed ungrouped and related in the platform by a user. A group
+  renamed by an analyst keeps that name across re-runs.
 - Runs before `facility-ingest`, which names the group each fund belongs to.
 
 ### `facility-ingest`

@@ -69,6 +69,12 @@ check("and it is marked as the group",
 check("a name that already says umbrella is not told twice",
       umbrella_name(("Carlyle Buyout Umbrella A", "Carlyle Buyout Umbrella B")),
       "Carlyle Buyout Umbrella")
+check("the report's own spelling of that name is kept, marker and all",
+      umbrella_name(MEMBERS, printed="Emberly Real Estate Debt [U]"),
+      "Emberly Real Estate Debt [U]")
+check("but a printed name that is not the members' shared stem does not override it",
+      umbrella_name(MEMBERS, printed="Northlake Credit Umbrella"),
+      "Emberly Real Estate Debt Umbrella")
 check("members sharing no name at all fall back to the printed row, never to the account",
       umbrella_name(("Alpha Fund IV", "Beta Fund II"), printed="Kelvin Buyout Umbrella"),
       "Kelvin Buyout Umbrella")

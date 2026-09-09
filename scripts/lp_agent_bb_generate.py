@@ -464,8 +464,17 @@ def umbrella_name(members: tuple[str, ...], printed: str = "") -> str:
     every fund on the account and that a reader can find on both files. The account number is never
     it: an account number names nothing, and the platform keys the group on it already, so a name
     that only restates it leaves the group unnamed. Where the members share no name at all the
-    printed row's name is used, and failing that the first member's, so there is always one."""
+    printed row's name is used, and failing that the first member's, so there is always one.
+
+    Where the summary report ALREADY printed that name — the members' shared stem, marked — its
+    exact spelling is kept, "[U]" as readily as "Umbrella". The report and the certificate then name
+    the agreement identically, which is what a reader matching the two files by hand goes on, and
+    re-spelling it here would put a second name on one credit agreement for no gain."""
     stem = common_name(list(members))
+    if UMBRELLA_MARKER_RE.search(printed or ""):
+        printed_stem = UMBRELLA_MARKER_RE.sub("", printed).strip()
+        if not stem or printed_stem.casefold() == stem.casefold():
+            return printed.strip()
     if not stem:
         stem = UMBRELLA_MARKER_RE.sub("", printed).strip() or " ".join(members[0].split()[:2])
     if any(marker.casefold() in stem.casefold() for marker in UMBRELLA_MARKERS):

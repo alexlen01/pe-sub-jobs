@@ -13,6 +13,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Establishes the request's {@link Authentication} from the gateway-asserted identity headers.
@@ -59,7 +60,7 @@ public class ServiceIdentityFilter extends OncePerRequestFilter {
                 : Arrays.stream(rolesRaw.split(","))
                         .map(role -> role.trim())
                         .filter(role -> !role.isEmpty())
-                        .map(role -> new SimpleGrantedAuthority("ROLE_" + role.toUpperCase()))
+                        .map(role -> new SimpleGrantedAuthority("ROLE_" + role.toUpperCase(Locale.ROOT)))
                         .toList();
 
         return UsernamePasswordAuthenticationToken.authenticated(user.trim(), null, authorities);

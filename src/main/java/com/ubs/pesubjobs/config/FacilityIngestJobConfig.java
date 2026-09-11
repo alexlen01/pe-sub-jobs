@@ -71,7 +71,7 @@ public class FacilityIngestJobConfig {
                         "agentBank", "name", "accountNumber", "loanAmount",
                         "maturityDate", "status", "statusDate",
                         "ubsParticipation", "collateralDate", "umbrellaName",
-                        "umbrellaKey", "umbrellaCrossCollateralized", "agreementRef"))
+                        "umbrellaKey", "umbrellaCrossCollateralized", "creditAgreementRef"))
                 .fieldSetMapper(fs -> new FacilityRow(
                         fs.readString("agentBank"),
                         fs.readString("name"),
@@ -85,7 +85,7 @@ public class FacilityIngestJobConfig {
                         fs.readString("umbrellaName"),
                         fs.readString("umbrellaKey"),
                         fs.readString("umbrellaCrossCollateralized"),
-                        fs.readString("agreementRef")
+                        fs.readString("creditAgreementRef")
                 ))
                 .build();
     }

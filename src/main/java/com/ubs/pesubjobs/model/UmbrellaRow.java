@@ -28,5 +28,17 @@ public record UmbrellaRow(
         // The credit agreement's own reference, where the agent prints one. What the API groups on
         // in preference to the account number, because an account is how a bank administers an
         // agreement and can be re-papered, whereas the reference is the agreement.
-        String agreementRef
+        String creditAgreementRef,
+        // ── the agreement's own terms ────────────────────────────────────────────────────────
+        // What the group governs its members from while it is Active: each member then reads these
+        // instead of its own row. Appended to the file, so a group fed by an older extract still
+        // loads — it simply states nothing about them.
+        String maturityDate,
+        // The date the agreement's collateral was last certified: the latest of its members', since
+        // each is certified against its own LP roster on its own date.
+        String collateralDate,
+        // The group's standing, and the switch that makes it govern at all. The extract states
+        // Active for every group it finds and Inactive where the agent printed otherwise; it never
+        // writes "Not Stated", which is what an unfed group already reads as.
+        String facilityStatus
 ) {}

@@ -20,5 +20,5 @@ public record ProcessedFacility(
         // Null where the feed states no agreement reference, which is every row of a feed written
         // before the column existed. Null never clears a reference the API already holds, and the
         // group falls back to resolving by its key.
-        String agreementRef
+        String creditAgreementRef
 ) {}

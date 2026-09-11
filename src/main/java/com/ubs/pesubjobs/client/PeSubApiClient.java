@@ -51,13 +51,10 @@ public class PeSubApiClient {
     /**
      * The group layer, posted ahead of the facilities that name it — see the umbrella ingest job.
      *
-     * <p>Posted to the master-agreement route, which is what the group has always been: a credit
-     * agreement several funds borrow under. The API still answers on {@code /api/umbrellas} as a
-     * deprecated alias, so a jobs build deployed before this change keeps loading — the two paths
-     * are one handler, so neither can drift from the other.
+    * <p>Posted to the umbrella route for the group several funds borrow under.
      */
     public ApiIngestSummary ingestUmbrellas(List<? extends ProcessedUmbrella> rows) {
-        return post("/api/master-agreements/ingest", rows);
+        return post("/api/umbrellas/ingest", rows);
     }
 
     public ApiIngestSummary ingestLpMaster(List<? extends ProcessedLpMaster> rows) {

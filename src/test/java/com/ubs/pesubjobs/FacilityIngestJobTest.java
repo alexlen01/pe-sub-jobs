@@ -147,7 +147,7 @@ class FacilityIngestJobTest extends IntegrationTestBase {
         assertThat(rows.getFirst().umbrellaCrossCollateralized()).isNull();
         // And for the agreement reference, last of all: silence, so the API groups the row by its
         // key exactly as it did before the column existed.
-        assertThat(rows.getFirst().agreementRef()).isNull();
+        assertThat(rows.getFirst().creditAgreementRef()).isNull();
     }
 
     @Test
@@ -157,7 +157,7 @@ class FacilityIngestJobTest extends IntegrationTestBase {
         // agreement with two borrowers. The reference is what the API resolves on first, so an
         // account re-papered between runs no longer splits the group.
         JobExecution execution = runFeed("""
-                "agent_bank","name","account_number","loan_amount","maturity_date","status","status_date","ubs_participation","collateral_date","umbrella_name","umbrella_key","cross_collateralized","agreement_ref"
+                "agent_bank","name","account_number","loan_amount","maturity_date","status","status_date","ubs_participation","collateral_date","umbrella_name","umbrella_key","cross_collateralized","credit_agreement_ref"
                 "Wells Fargo","Carlyle Buyout V","5VZ8873","100000000","2028-01-12","Active","2026-05-13","","2026-04-28","Carlyle Buyout Umbrella","5VZ8873","","CA-2021-4471"
                 "Wells Fargo","Carlyle Buyout VI","5VZ9001","150000000","2028-01-12","Active","2026-05-13","","2026-04-28","Carlyle Buyout Umbrella","5VZ9001","","CA-2021-4471"
                 "Wells Fargo","HIG LBO IV","5VX1796","75000000","2028-01-12","Active","2026-05-13","","2026-04-28","","",""
@@ -166,7 +166,7 @@ class FacilityIngestJobTest extends IntegrationTestBase {
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
         List<ProcessedFacility> rows = capturedFacilityRows();
         assertThat(rows)
-                .extracting((ProcessedFacility f) -> f.agreementRef())
+                .extracting((ProcessedFacility f) -> f.creditAgreementRef())
                 // A fund borrowing alone states no agreement, and blank arrives as null rather than
                 // as an empty reference — which would be a reference, and a shared one at that.
                 .containsExactly("CA-2021-4471", "CA-2021-4471", null);

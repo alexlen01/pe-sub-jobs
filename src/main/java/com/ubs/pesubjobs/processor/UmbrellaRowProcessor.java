@@ -20,7 +20,10 @@ public class UmbrellaRowProcessor implements ItemProcessor<UmbrellaRow, Processe
                 blankToNull(item.accountNumber()),
                 parseDecimal(item.loanAmount()),
                 parseBoolean(item.crossCollateralized()),
-                blankToNull(item.agreementRef())
+                blankToNull(item.creditAgreementRef()),
+                FeedDates.parse(item.maturityDate()),
+                FeedDates.parse(item.collateralDate()),
+                blankToNull(item.facilityStatus())
         );
     }
 

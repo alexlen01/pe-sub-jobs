@@ -18,16 +18,20 @@ Run directly, no test framework needed:
 """
 from __future__ import annotations
 
+import csv
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from lp_db_extract import (  # noqa: E402
-    FACILITY_WORK_COLS, SRC_COLS, assign_umbrellas, legacy_sleeve_reading, upsert_facilities,
+    FACILITY_WORK_COLS, SRC_COLS, UMBRELLA_COLS, assign_umbrellas, legacy_sleeve_reading,
+    upsert_facilities, write_umbrellas,
 )
 
 AGENT, NAME, ACCT, LOAN, MATURITY, STATUS = 0, 1, 2, 3, 4, 5
+COLLATERAL = FACILITY_WORK_COLS.index("collateral_date")
 UMBRELLA, KEY, XCOLL = 9, 10, 11
 TRANCHE_TYPE = FACILITY_WORK_COLS.index("tranche_type")
 TRANCHE_OF = FACILITY_WORK_COLS.index("tranche_of")
@@ -309,6 +313,107 @@ check("the members still group by the account they share",
       (len(groups), groups[0].key), (1, "5VZ8873"))
 check("under the name the agent printed", groups[0].name, "Carlyle Buyout Umbrella")
 check("with the reference recorded on the group", groups[0].agreement_ref, "CA-2021-4471")
+
+# ── the agreement's own terms ─────────────────────────────────────────────────
+#
+# The group is what the platform governs a member fund from: while it is Active it hands down its
+# account number, line, maturity, collateral date and standing, and the member's own terms stand
+# aside. A group fed without those arrives Not Stated and governs nothing, so the extract carries
+# them - but only ever from what a file states. Nothing below is inferred, summed or split.
+
+def terms(g) -> tuple[str, str, str, str, str]:
+    """(account, line, maturity, collateral date, standing) - what the group feed states."""
+    return (g.account_number, g.loan_amount, g.maturity_date, g.collateral_date, g.facility_status)
+
+
+fac_data, by_acct = report([report_row("Wells Fargo", "Carlyle Buyout Umbrella", "5VZ8873",
+                                       loan="1500000000", maturity="2029-03-31")])
+rows, _, stated = upsert_facilities(
+    fac_data, by_acct, [export_row("5VZ8873", f) for f in CARLYLE])
+groups = assign_umbrellas(rows, stated)
+check("a printed group row feeds the agreement's terms, not an empty shell",
+      terms(groups[0]),
+      ("5VZ8873", "1500000000", "2029-03-31", "2026-06-25", "Active"))
+
+# The collateral date is the one term the members are not expected to agree on: each is certified
+# against its own roster, on its own date. The agreement stands as of the last of them - an earlier
+# date would put the group behind evidence it already holds.
+fac_data, by_acct = report([report_row("Wells Fargo", "Carlyle Buyout Umbrella", "5VZ8873",
+                                       loan="1500000000", maturity="2029-03-31")])
+rows, _, stated = upsert_facilities(fac_data, by_acct, [
+    export_row("5VZ8873", "Carlyle VII", bbdate="2026-03-31"),
+    export_row("5VZ8873", "Carlyle VIII", bbdate="2026-06-25"),
+    export_row("5VZ8873", "Carlyle CGP", bbdate="2026-05-29"),
+])
+groups = assign_umbrellas(rows, stated)
+check("the group is collateralized as of its members' latest date",
+      groups[0].collateral_date, "2026-06-25")
+
+# An agreement the agent does not call Active is fed as the agent stated it. Governing its members
+# off a standing the report contradicts would hand down terms the bank says are not in force.
+fac_data, by_acct = report([report_row("Wells Fargo", "Carlyle Buyout Umbrella", "5VZ8873",
+                                       loan="1500000000", status="Matured")])
+rows, _, stated = upsert_facilities(
+    fac_data, by_acct, [export_row("5VZ8873", f) for f in CARLYLE])
+groups = assign_umbrellas(rows, stated)
+check("the agent's own standing wins over the default", groups[0].facility_status, "Inactive")
+
+# ── a group the report named no row for ───────────────────────────────────────
+#
+# The terms are read off the members instead, and only where they AGREE. Funds on one account
+# repeating one figure are each being shown the agreement's line, which is that line.
+
+def member(name: str, account: str, loan: str = "", maturity: str = "",
+           collateral: str = "") -> list[str]:
+    row = facility(name, account)
+    row[LOAN], row[MATURITY], row[COLLATERAL] = loan, maturity, collateral
+    return row
+
+
+rows = [member("Atlas Growth Fund IV", "5VZ8873", "750000000", "2030-06-30", "2026-06-25"),
+        member("Atlas Growth Feeder IV", "5VZ8873", "750000000", "2030-06-30", "2026-04-30")]
+groups = assign_umbrellas(rows)
+check("the members' agreed terms are the agreement's",
+      terms(groups[0]),
+      ("5VZ8873", "750000000", "2030-06-30", "2026-06-25", "Active"))
+
+# Different figures on one account are the funds' own allocations, not the agreement's line. Summing
+# them would state a line no file does, and picking one would govern every sibling off a number
+# printed for one fund. Blank is silence, and the platform derives the size from the shares instead.
+rows = [member("Sablecreek Fund IX", "5VZ8873", "400000000", "2030-06-30"),
+        member("Sablecreek Fund X", "5VZ8873", "250000000", "2031-12-31")]
+groups = assign_umbrellas(rows)
+check("members disagreeing on the line leave it blank - never summed, never picked",
+      (groups[0].loan_amount, groups[0].maturity_date), ("", ""))
+check("and the group is still Active, which is what makes it govern at all",
+      groups[0].facility_status, "Active")
+
+# Not Stated is the one value never fed. It was the old default and it left every extracted
+# agreement inert until somebody opened it and retyped what the file already said.
+rows = [member("Orphan Group Fund I", "5VZ9100"), member("Orphan Group Fund II", "5VZ9100")]
+groups = assign_umbrellas(rows)
+check("a group stating no terms at all is still Active",
+      terms(groups[0]), ("5VZ9100", "", "", "", "Active"))
+
+# ── the feed's own shape ──────────────────────────────────────────────────────
+#
+# The new columns are APPENDED. A reader positioned on the older header goes on reading the columns
+# before them unchanged, and the row the writer emits has to stay in step with the header it wrote -
+# a ragged row is read one column out of step the whole way across.
+check("the terms are appended to the group feed, never inserted",
+      UMBRELLA_COLS,
+      ["key", "name", "agent_bank", "account_number", "loan_amount", "cross_collateralized",
+       "agreement_ref", "maturity_date", "collateral_date", "facility_status"])
+
+with tempfile.TemporaryDirectory() as tmp:
+    path = Path(tmp) / "umbrellas.csv"
+    write_umbrellas(path, groups)
+    written = list(csv.reader(path.open(newline="", encoding="utf-8")))
+
+check("the file's header is the contract", written[0], UMBRELLA_COLS)
+check("and every group writes one cell per column, in that order",
+      written[1], ["5VZ9100", "Umbrella 5VZ9100", "Ashford Bank", "5VZ9100", "", "", "", "", "",
+                   "Active"])
 
 # ── report ────────────────────────────────────────────────────────────────────
 

@@ -28,5 +28,5 @@ public record FacilityRow(
         // The credit agreement this row's group is held under, where the agent prints a reference.
         // Last in the row on purpose: it is the newest column, and a feed written before it existed
         // still loads and still groups by its key exactly as it did.
-        String agreementRef
+        String creditAgreementRef
 ) {}

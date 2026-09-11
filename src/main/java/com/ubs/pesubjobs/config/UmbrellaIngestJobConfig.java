@@ -66,9 +66,13 @@ public class UmbrellaIngestJobConfig {
                 .name("umbrellaReader")
                 .resource(new FileSystemResource(filePath))
                 .linesToSkip(1)
+                // In the order the extract writes them. The agreement's terms are APPENDED, so a
+                // file written before they existed is short by three cells rather than misaligned;
+                // the lenient tokenizer pads it and the group loads stating nothing about them.
                 .lineTokenizer(CsvLineTokenizers.lenientQuotedCsvTokenizer(
                         "key", "name", "agentBank", "accountNumber",
-                        "loanAmount", "crossCollateralized", "agreementRef"))
+                        "loanAmount", "crossCollateralized", "creditAgreementRef",
+                        "maturityDate", "collateralDate", "facilityStatus"))
                 .fieldSetMapper(fs -> new UmbrellaRow(
                         fs.readString("key"),
                         fs.readString("name"),
@@ -76,7 +80,10 @@ public class UmbrellaIngestJobConfig {
                         fs.readString("accountNumber"),
                         fs.readString("loanAmount"),
                         fs.readString("crossCollateralized"),
-                        fs.readString("agreementRef")
+                        fs.readString("creditAgreementRef"),
+                        fs.readString("maturityDate"),
+                        fs.readString("collateralDate"),
+                        fs.readString("facilityStatus")
                 ))
                 .build();
     }

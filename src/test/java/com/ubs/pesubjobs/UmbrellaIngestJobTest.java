@@ -16,6 +16,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDate;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -124,14 +125,14 @@ class UmbrellaIngestJobTest extends IntegrationTestBase {
         // groups on ahead of the account number, because an account is how a bank administers an
         // agreement and can be re-papered without the agreement changing.
         JobExecution execution = runFeed("""
-                "key","name","agent_bank","account_number","loan_amount","cross_collateralized","agreement_ref"
+                "key","name","agent_bank","account_number","loan_amount","cross_collateralized","credit_agreement_ref"
                 "5VZ8873","Carlyle Buyout Umbrella","Wells Fargo","5VZ8873","1500000000","","CA-2021-4471"
                 """);
 
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
 
         ProcessedUmbrella row = capturedUmbrellaRows().getFirst();
-        assertThat(row.agreementRef()).isEqualTo("CA-2021-4471");
+        assertThat(row.creditAgreementRef()).isEqualTo("CA-2021-4471");
     }
 
     @Test
@@ -149,7 +150,81 @@ class UmbrellaIngestJobTest extends IntegrationTestBase {
 
         ProcessedUmbrella row = capturedUmbrellaRows().getFirst();
         assertThat(row.key()).isEqualTo("5VT5929");
-        assertThat(row.agreementRef()).isNull();
+        assertThat(row.creditAgreementRef()).isNull();
+    }
+
+    @Test
+    void carriesTheAgreementsOwnTermsAndStanding() throws Exception {
+        // The terms a group hands down to every member fund while it is Active. They are parsed here
+        // so an agreement whose maturity and collateral date are printed in the file does not land on
+        // the platform empty and governing nothing until somebody types them back in.
+        JobExecution execution = runFeed("""
+                "key","name","agent_bank","account_number","loan_amount","cross_collateralized","credit_agreement_ref","maturity_date","collateral_date","facility_status"
+                "5VZ8873","Carlyle Buyout Umbrella","Wells Fargo","5VZ8873","1500000000","","CA-2021-4471","2029-03-31","2026-06-25","Active"
+                """);
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
+
+        ProcessedUmbrella row = capturedUmbrellaRows().getFirst();
+        assertThat(row.maturityDate()).isEqualTo(LocalDate.of(2029, 3, 31));
+        assertThat(row.collateralDate()).isEqualTo(LocalDate.of(2026, 6, 25));
+        // The one switch that makes the group govern its members at all.
+        assertThat(row.facilityStatus()).isEqualTo("Active");
+    }
+
+    @Test
+    void readsTheSlashedDateShapeTheFacilityFeedUses() throws Exception {
+        // Both feeds state the same agreement's dates, so both read the same shapes. A group feed
+        // that rejected M/d/yyyy would stop a run over a date its sibling file accepts.
+        JobExecution execution = runFeed("""
+                "key","name","agent_bank","account_number","loan_amount","cross_collateralized","credit_agreement_ref","maturity_date","collateral_date","facility_status"
+                "5VZ8873","Carlyle Buyout Umbrella","Wells Fargo","5VZ8873","","","","3/31/2029","6/25/2026","Active"
+                """);
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
+
+        ProcessedUmbrella row = capturedUmbrellaRows().getFirst();
+        assertThat(row.maturityDate()).isEqualTo(LocalDate.of(2029, 3, 31));
+        assertThat(row.collateralDate()).isEqualTo(LocalDate.of(2026, 6, 25));
+    }
+
+    @Test
+    void aGroupStatingNoTermsReachesTheApiAsSilence() throws Exception {
+        // The columns are present and empty — an inferred group whose members disagreed on their
+        // terms. Silence must stay silence all the way to the API, which is what stops a re-run
+        // blanking a maturity an analyst recorded.
+        JobExecution execution = runFeed("""
+                "key","name","agent_bank","account_number","loan_amount","cross_collateralized","credit_agreement_ref","maturity_date","collateral_date","facility_status"
+                "5VZ9100","Umbrella 5VZ9100","Ashford Bank","5VZ9100","","","","","","Active"
+                """);
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
+
+        ProcessedUmbrella row = capturedUmbrellaRows().getFirst();
+        assertThat(row.maturityDate()).isNull();
+        assertThat(row.collateralDate()).isNull();
+        assertThat(row.facilityStatus()).isEqualTo("Active");
+    }
+
+    @Test
+    void aFeedWrittenBeforeTheTermsColumnsExisted_statesNoTerms() throws Exception {
+        // Seven columns, from before the agreement's terms were carried. Appended-never-inserted
+        // means the row is short rather than misaligned: the lenient tokenizer pads it, the group
+        // loads exactly as it did before, and it simply states nothing about its own terms.
+        JobExecution execution = runFeed("""
+                "key","name","agent_bank","account_number","loan_amount","cross_collateralized","credit_agreement_ref"
+                "5VT5929","Emberly Umbrella XII, LP","BFBH","5VT5929","200000000","","CA-2019-8812"
+                """);
+
+        assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
+
+        ProcessedUmbrella row = capturedUmbrellaRows().getFirst();
+        assertThat(row.creditAgreementRef()).isEqualTo("CA-2019-8812");
+        assertThat(row.facilitySize()).isEqualByComparingTo(new BigDecimal("200000000"));
+        assertThat(row.maturityDate()).isNull();
+        assertThat(row.collateralDate()).isNull();
+        // No standing invented for a file that states none — the API leaves the group's alone.
+        assertThat(row.facilityStatus()).isNull();
     }
 
     private List<ProcessedUmbrella> capturedUmbrellaRows() {

@@ -1,6 +1,7 @@
 package com.ubs.pesubjobs.model;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 
 /**
  * One umbrella feed row as the API takes it. Mirrors pe-sub-api's umbrella ingest payload: the
@@ -18,5 +19,13 @@ public record ProcessedUmbrella(
         Boolean crossCollateralized,
         // The agreement's own reference. Null where the feed states nothing, which the API reads as
         // silence rather than as a correction.
-        String agreementRef
+        String creditAgreementRef,
+        // The agreement's own loan terms, which the group hands down to every member fund while it
+        // is Active. Null where the feed states none, which never blanks a term an analyst recorded.
+        LocalDate maturityDate,
+        LocalDate collateralDate,
+        // One of Pending, Active or Inactive as the feed states it — never "Not Stated", which is
+        // what a group nothing has been said about already reads as. The API takes this on create
+        // and to fill a blank, and never over a standing an analyst set.
+        String facilityStatus
 ) {}

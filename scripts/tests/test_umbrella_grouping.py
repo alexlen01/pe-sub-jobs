@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 r"""Cover the grouping the extractor stamps onto every facility row.
 
-ONE relationship groups: a shared ACCOUNT NUMBER, which is not an inference but the agent's own
-statement that several funds draw on one credit agreement. Getting it wrong is expensive in both
-directions - an umbrella missed leaves each fund reporting as a separate agreement, and one invented
-pools funds that never shared paperwork.
+TWO statements group, and both are required: the export shares an ACCOUNT NUMBER between several
+funds, AND the Agent Bank Summary prints the umbrella's own facility row over that account. Neither
+is an inference - the account is how the agent administers the funds, the printed row is the agent
+naming the agreement above them. Getting it wrong is expensive in both directions: an umbrella missed
+leaves each fund reporting as a separate agreement, and one invented from the account alone pools
+funds under a credit agreement no file reported.
 
 Everything else is left to a user. Facilities holding their OWN account numbers are never related
 here, however plainly they read as one agreement - the sleeves of a multi-tranche facility, or two
@@ -26,8 +28,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from lp_db_extract import (  # noqa: E402
-    FACILITY_WORK_COLS, SRC_COLS, UMBRELLA_COLS, assign_umbrellas, legacy_sleeve_reading,
-    upsert_facilities, write_umbrellas,
+    FACILITY_WORK_COLS, SRC_COLS, UMBRELLA_COLS, StatedGroup, assign_umbrellas,
+    legacy_sleeve_reading, upsert_facilities, write_umbrellas,
 )
 
 AGENT, NAME, ACCT, LOAN, MATURITY, STATUS = 0, 1, 2, 3, 4, 5
@@ -43,6 +45,13 @@ failures: list[str] = []
 def check(label: str, actual, expected) -> None:
     if actual != expected:
         failures.append(f"{label}\n    expected: {expected!r}\n    actual:   {actual!r}")
+
+
+def printed_over(account: str, name: str = "The Agreement", loan: str = "", maturity: str = "",
+                 status: str = "Active", agreement_ref: str = "") -> dict[str, StatedGroup]:
+    """The `stated` map for an account the report printed an umbrella row over."""
+    return {account: StatedGroup(account, name, "Ashford Bank", loan, maturity, status, "",
+                                 agreement_ref=agreement_ref)}
 
 
 def facility(name: str, account: str, agreement_ref: str = "") -> list[str]:
@@ -104,35 +113,65 @@ rows = [facility("Zephyrus Mezzanine", "5VZ8870"),
 check("a whole facility standing beside two sleeves of its own name groups nothing",
       (assign_umbrellas(rows), [r[UMBRELLA] for r in rows]), ([], ["", "", ""]))
 
-# ── account umbrellas ─────────────────────────────────────────────────────────
+# ── account umbrellas: the account AND the printed row ────────────────────────
 
 rows = [facility("Atlas Growth Fund IV", "5VZ8873"),
         facility("Atlas Growth Feeder IV", "5VZ8873"),
         facility("Zenith Partners VII", "5VZ9001")]
-groups = assign_umbrellas(rows)
+groups = assign_umbrellas(rows, printed_over("5VZ8873", "Atlas Growth Umbrella"))
 
-check("one account carrying two borrowers forms one umbrella", len(groups), 1)
-check("named and keyed from the account", (groups[0].name, groups[0].key),
-      ("Umbrella 5VZ8873", "5VZ8873"))
+check("an account the report prints an umbrella over forms one umbrella", len(groups), 1)
+check("named from the printed row and keyed on the account", (groups[0].name, groups[0].key),
+      ("Atlas Growth Umbrella", "5VZ8873"))
 check("the fund borrowing alone joins nothing", rows[2][UMBRELLA], "")
 check("a shared borrowing base is NOT inferred - it is a term of the credit agreement",
       [rows[0][XCOLL], rows[1][XCOLL]], ["", ""])
 
+# ── a shared account with NO umbrella row printed over it groups NOTHING ──────
+#
+# The account says the agent administers these funds together; it does not say what agreement sits
+# above them. Minting one from the account number alone produces a credit agreement no file
+# reported - named only for the account, with no line and no standing of its own - and the platform
+# governs its members' loan terms from it regardless. The funds are fed as the facilities the report
+# states they are, and the umbrella is an analyst's to create.
+
+rows = [facility("Atlas Growth Fund IV", "5VZ8873"),
+        facility("Atlas Growth Feeder IV", "5VZ8873")]
+groups = assign_umbrellas(rows)
+
+check("a shared account alone forms no umbrella", groups, [])
+check("and neither fund is stamped with one",
+      [(r[UMBRELLA], r[KEY]) for r in rows], [("", ""), ("", "")])
+
+# The umbrella the report DOES print is unaffected by the one it does not: an account is judged on
+# its own row, not on what its neighbours carry.
+rows = [facility("Atlas Growth Fund IV", "5VZ8873"),
+        facility("Atlas Growth Feeder IV", "5VZ8873"),
+        facility("Halden Fund I", "5VZ9001"),
+        facility("Halden Fund II", "5VZ9001")]
+groups = assign_umbrellas(rows, printed_over("5VZ9001", "Halden Umbrella"))
+check("only the account with a printed row is grouped",
+      [(g.key, g.name) for g in groups], [("5VZ9001", "Halden Umbrella")])
+check("and the other account's funds stay ungrouped",
+      [r[UMBRELLA] for r in rows], ["", "", "Halden Umbrella", "Halden Umbrella"])
+
 # Blank is the absence of an account, not an account several facilities hold in common.
 rows = [facility("Orphan Fund I", ""), facility("Orphan Fund II", "")]
-check("accountless facilities are never pooled into one umbrella", assign_umbrellas(rows), [])
+check("accountless facilities are never pooled into one umbrella",
+      assign_umbrellas(rows, printed_over("")), [])
 
-# ── a sleeve that shares an account is grouped BY THAT ACCOUNT ────────────────
+# ── a sleeve that shares a grouped account is grouped BY THAT ACCOUNT ─────────
 #
 # Being a sleeve neither creates a group nor exempts a facility from one. The account is read the
 # same way whatever the name on the row says, so the committed sleeve and the co-invest sharing its
-# account are one umbrella, and the uncommitted sleeve on its own account is in nothing.
+# account are members of the umbrella printed over it, and the uncommitted sleeve on its own account
+# is in nothing.
 rows = [facility("Blackford Continuation III (Committed)", "5VZ8873"),
         facility("Blackford Continuation III (Uncommitted)", "5VZ8874"),
         facility("Blackford Co-Invest III", "5VZ8873")]
-groups = assign_umbrellas(rows)
+groups = assign_umbrellas(rows, printed_over("5VZ8873", "Blackford Umbrella"))
 
-check("the shared account forms the one group", (len(groups), groups[0].key), (1, "5VZ8873"))
+check("the printed account forms the one group", (len(groups), groups[0].key), (1, "5VZ8873"))
 check("over the two facilities that hold it, sleeve or not",
       sorted(groups[0].members), ["Blackford Co-Invest III", "Blackford Continuation III (Committed)"])
 check("and the sleeve on its own account joins nothing", rows[1][UMBRELLA], "")
@@ -216,18 +255,20 @@ check("and keeps the report's spelling, loan amount and standing",
       [rows[0][NAME], rows[0][LOAN], rows[0][STATUS]],
       ["Northwind Cap Ptrs IV", "400000000", "Active"])
 
-# The generator's shape, and the one the design was built on: the report prints every member fund.
-# Each row name-matches its own fund, so nothing is left over and no group row is inferred.
+# The report prints every member fund and no agreement above them. Each row name-matches its own
+# fund, so nothing is left over, no group row is stated - and nothing is grouped. Two facilities
+# administered on one account is what the report says, and it is what the platform is fed.
 fac_data, by_acct = report([report_row("Ashford Bank", "Atlas Growth Fund IV", "5VZ8873"),
                             report_row("Ashford Bank", "Atlas Growth Feeder IV", "5VZ8873")])
 rows, name_by_key, stated = upsert_facilities(
     fac_data, by_acct,
     [export_row("5VZ8873", "Atlas Growth Fund IV"), export_row("5VZ8873", "Atlas Growth Feeder IV")])
 check("a report that prints every member states no group row", stated, {})
-groups = assign_umbrellas(rows, stated)
-check("so the group's name is still minted from the account", groups[0].name, "Umbrella 5VZ8873")
-check("and it records no agreement line, because the report printed none over the group",
-      groups[0].loan_amount, "")
+check("and with no group row there is no umbrella", assign_umbrellas(rows, stated), [])
+check("both funds reach the platform as the facilities the report printed",
+      sorted(name_by_key.values()), ["Atlas Growth Feeder IV", "Atlas Growth Fund IV"])
+check("neither carrying a group it was never reported under",
+      [r[UMBRELLA] for r in rows], ["", ""])
 
 # Two report rows over three funds: one row may be a group row and one a member, or both members
 # spelt differently. An ambiguous row stays a facility - demoting one to a group would take its LP
@@ -275,25 +316,26 @@ check("and each keeps the reference, which is what a user relates them by",
 
 rows = [facility("Atlas Growth Fund IV", "5VZ8873"),
         facility("Atlas Growth Feeder IV", "5VZ8873")]
-groups = assign_umbrellas(rows)
-check("a book that states no reference groups by account, as it always has",
+groups = assign_umbrellas(rows, printed_over("5VZ8873"))
+check("a book that states no reference groups on the printed row alone",
       (len(groups), groups[0].key, groups[0].agreement_ref), (1, "5VZ8873", ""))
 
-# A reference stated over one member of an account group is the agreement's, and the group adopts
-# it: the sibling saying nothing is silence, not a second agreement.
+# A reference stated over one member and not on the printed row is the agreement's, and the group
+# adopts it: the sibling saying nothing is silence, not a second agreement.
 rows = [facility("Halden Fund I", "5VZ8873", "CA-9000"),
         facility("Halden Fund II", "5VZ8873")]
-groups = assign_umbrellas(rows)
-check("the account groups both funds", (len(groups), groups[0].key, [r[UMBRELLA] for r in rows]),
-      (1, "5VZ8873", ["Umbrella 5VZ8873", "Umbrella 5VZ8873"]))
+groups = assign_umbrellas(rows, printed_over("5VZ8873", "Halden Umbrella"))
+check("the printed account groups both funds",
+      (len(groups), groups[0].key, [r[UMBRELLA] for r in rows]),
+      (1, "5VZ8873", ["Halden Umbrella", "Halden Umbrella"]))
 check("and the group adopts the one reference stated over it", groups[0].agreement_ref, "CA-9000")
 
 # Two references over one account is a contradiction in the file. Picking either would resolve the
 # group onto an agreement half its members were never said to be under.
 rows = [facility("Sablecreek Fund IX", "5VZ8873", "CA-100"),
         facility("Sablecreek Fund X", "5VZ8873", "CA-200")]
-groups = assign_umbrellas(rows)
-check("members naming different agreements still group by their shared account",
+groups = assign_umbrellas(rows, printed_over("5VZ8873"))
+check("members naming different agreements still group under the printed row",
       (len(groups), groups[0].key), (1, "5VZ8873"))
 check("but the group claims neither reference", groups[0].agreement_ref, "")
 
@@ -358,10 +400,12 @@ rows, _, stated = upsert_facilities(
 groups = assign_umbrellas(rows, stated)
 check("the agent's own standing wins over the default", groups[0].facility_status, "Inactive")
 
-# ── a group the report named no row for ───────────────────────────────────────
+# ── the members' own terms are never read as the agreement's ──────────────────
 #
-# The terms are read off the members instead, and only where they AGREE. Funds on one account
-# repeating one figure are each being shown the agreement's line, which is that line.
+# Funds on one account repeating one figure are each being shown their own line, and the report is
+# the only thing that states the agreement's. Where it printed a row, the group's line and maturity
+# come off that row whatever the members carry; the collateral date is the members' latest, because
+# it is the one term each is certified on separately.
 
 def member(name: str, account: str, loan: str = "", maturity: str = "",
            collateral: str = "") -> list[str]:
@@ -372,18 +416,23 @@ def member(name: str, account: str, loan: str = "", maturity: str = "",
 
 rows = [member("Atlas Growth Fund IV", "5VZ8873", "750000000", "2030-06-30", "2026-06-25"),
         member("Atlas Growth Feeder IV", "5VZ8873", "750000000", "2030-06-30", "2026-04-30")]
-groups = assign_umbrellas(rows)
-check("the members' agreed terms are the agreement's",
-      terms(groups[0]),
-      ("5VZ8873", "750000000", "2030-06-30", "2026-06-25", "Active"))
+check("members agreeing on a figure still do not make an umbrella between them",
+      assign_umbrellas(rows), [])
 
-# Different figures on one account are the funds' own allocations, not the agreement's line. Summing
-# them would state a line no file does, and picking one would govern every sibling off a number
-# printed for one fund. Blank is silence, and the platform derives the size from the shares instead.
+groups = assign_umbrellas(rows, printed_over("5VZ8873", "Atlas Growth Umbrella",
+                                             loan="1500000000", maturity="2029-03-31"))
+check("the printed row states the agreement's line and maturity, not the members' figures",
+      terms(groups[0]),
+      ("5VZ8873", "1500000000", "2029-03-31", "2026-06-25", "Active"))
+
+# Different figures on one account are the funds' own allocations. Summing them would state a line no
+# file does, and picking one would govern every sibling off a number printed for one fund - so the
+# members are not read for it at all. A printed row that states no line leaves it blank, which is
+# silence, and the platform derives the size from the shares instead.
 rows = [member("Sablecreek Fund IX", "5VZ8873", "400000000", "2030-06-30"),
         member("Sablecreek Fund X", "5VZ8873", "250000000", "2031-12-31")]
-groups = assign_umbrellas(rows)
-check("members disagreeing on the line leave it blank - never summed, never picked",
+groups = assign_umbrellas(rows, printed_over("5VZ8873"))
+check("members' own lines are never summed into the agreement's, nor picked between",
       (groups[0].loan_amount, groups[0].maturity_date), ("", ""))
 check("and the group is still Active, which is what makes it govern at all",
       groups[0].facility_status, "Active")
@@ -391,7 +440,7 @@ check("and the group is still Active, which is what makes it govern at all",
 # Not Stated is the one value never fed. It was the old default and it left every extracted
 # agreement inert until somebody opened it and retyped what the file already said.
 rows = [member("Orphan Group Fund I", "5VZ9100"), member("Orphan Group Fund II", "5VZ9100")]
-groups = assign_umbrellas(rows)
+groups = assign_umbrellas(rows, printed_over("5VZ9100", "Orphan Group Umbrella"))
 check("a group stating no terms at all is still Active",
       terms(groups[0]), ("5VZ9100", "", "", "", "Active"))
 
@@ -412,8 +461,8 @@ with tempfile.TemporaryDirectory() as tmp:
 
 check("the file's header is the contract", written[0], UMBRELLA_COLS)
 check("and every group writes one cell per column, in that order",
-      written[1], ["5VZ9100", "Umbrella 5VZ9100", "Ashford Bank", "5VZ9100", "", "", "", "", "",
-                   "Active"])
+      written[1], ["5VZ9100", "Orphan Group Umbrella", "Ashford Bank", "5VZ9100", "", "", "", "",
+                   "", "Active"])
 
 # ── report ────────────────────────────────────────────────────────────────────
 

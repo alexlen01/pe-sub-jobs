@@ -18,10 +18,11 @@ facility the report prints.
 
 The roster itself is MINTED rather than transcribed: build_roster() draws the agents, borrowers,
 accounts, amounts and dates from ROSTER_SEED, so the sample states no real institution's book of
-business and its size is a tunable (ROSTER_AGENTS, ROSTER_FACILITIES) rather than a rewrite. The
-population is random; the SHAPE is not. Umbrellas, split borrowers, reprints, tranche sleeves and
-manual-entry damage in the names are generated at the rates the printed report carries them, and
-validate_roster() fails the run if a population comes out without them.
+business and its size is a tunable (ROSTER_FACILITIES, AGENT_BOOK_TYPICAL) rather than a rewrite.
+The population is random; the SHAPE is not. Agent books the size an agent bank actually manages,
+umbrellas, split borrowers, reprints, tranche sleeves and manual-entry damage in the names are
+generated at the rates the printed report carries them, and validate_roster() fails the run if a
+population comes out without them.
 
 The UBS credit columns are never among those variations. UBS LP Classification, UBS Advance Rate,
 UBS Concentration Limit and UBS Borrowing Base are always genuine: the classification is written in
@@ -251,13 +252,39 @@ ABS_SUBTOTAL_FORMULA = {
 #     because the export's FndName has to join back to exactly this string.
 ROSTER_SEED = 20260831          # the roster draws from its own rng, so the population holds still
                                 # when SEED, CHAOS_SEED or TARGET_ROWS are changed
-ROSTER_AGENTS = (25, 35)        # agent groups the report prints
-ROSTER_FACILITIES = 70          # facility ROWS the report prints, and the Active facility count
+ROSTER_FACILITIES = 210         # facility ROWS the report prints, and the Active facility count
                                 # the report therefore states. Reprints collapse on the way in,
                                 # so the export sees slightly fewer distinct facilities, plus
                                 # ORPHAN_COUNT more that the report never printed. It is a floor: a
                                 # population too small to hold one of every structure gets one
                                 # anyway, because coverage outranks the row count.
+
+# How large an agent's BOOK is - the borrowers one agent bank manages, which is the number of rows
+# printed beneath its group header. An agent bank that has gone to the trouble of standing up a
+# subscription-line desk does not administer a single facility on it: the majority of the agents on
+# the printed report manage five to ten borrowers apiece, a few carry a larger book, and a single-
+# facility agent is a rarity rather than the norm. The agent COUNT is not a tunable of its own any
+# more - it falls out of ROSTER_FACILITIES dealt into books this size (~28 agents at the default) -
+# because setting the agent count, the facility count and the book size independently lets two of
+# them contradict the third, and it was the book size that lost: a pareto split of 70 rows over 25-35
+# agents printed most of the report's agents with one borrower each, which is the shape of a book
+# that is being wound down, not of one being lent against.
+AGENT_BOOK_TYPICAL = (5, 10)    # the book the majority of agents carry
+AGENT_BOOK_LARGE = (11, 18)     # the correspondent with a deeper book than its peers
+AGENT_SMALL_RATE = 0.12         # 2 to AGENT_BOOK_TYPICAL[0] - 1: a desk still building its book
+AGENT_LARGE_RATE = 0.10         # AGENT_BOOK_LARGE
+# The books at the ends of the range are COUNTED as well as rated, for the same reason
+# GROUP_UMBRELLA_COUNT is: at the frequency they belong on the report a rate alone rounds them away
+# on a population this size - thirty-odd draws at AGENT_LARGE_RATE come out empty about one run in
+# twenty-five - and a roster without them renders and extracts perfectly while quietly no longer
+# stating either end.
+#
+# AGENT_BAND_BOOKS are the small groups the report's SUBTOTAL bands are spelled over, and they are
+# floored for that reason as much as for the population's shape: "single" and "single_abs" can only
+# band a one-row group and "pair" can only band a two-row one, so a roster of nothing but healthy
+# books would stop exercising three of the five band shapes ABS_SUBTOTAL_FORMULA spells.
+AGENT_BAND_BOOKS = (1, 1, 2)
+AGENT_LARGE_BOOKS = 1
 
 # The quirk mix, as a share of printed rows, at the rates the printed report shows them - its 72
 # rows hold 4 tranche pairs, 2 umbrellas over 5 rows, 3 split borrowers and 1 reprint. Each is
@@ -647,21 +674,62 @@ def _unit_reprint(rng: random.Random, accts: set[str], names: set[str]) -> list[
     return [row, _facility_row(name, acct, loan, maturity, restated)]
 
 
-def _partition(rng: random.Random, units: int, groups: int) -> list[int]:
-    """How many units each agent group carries: a long tail, like the printed report's, where two
-    agents carry sixteen facilities each and eight carry one. Every group gets at least one, because
-    an agent printed with no facilities beneath it is a header row the extract would carry down onto
-    the NEXT agent's rows."""
-    weights = [rng.paretovariate(1.3) for _ in range(groups)]
-    total = sum(weights)
-    counts = [max(1, int(units * w / total)) for w in weights]
-    while sum(counts) > units:
-        i = rng.randrange(groups)
-        if counts[i] > 1:
-            counts[i] -= 1
-    while sum(counts) < units:
-        counts[rng.randrange(groups)] += 1
-    return counts
+def _agent_book_size(rng: random.Random) -> int:
+    """How many borrowers ONE agent bank manages - the rows printed beneath its group header.
+
+    Drawn from the mix the tunables state rather than from a pareto tail: the majority of agents
+    carry AGENT_BOOK_TYPICAL borrowers, a tenth carry a deeper book, and a few are still building
+    one. A book of ONE is not drawn here at all - it is floored by the caller, AGENT_SOLO_BOOKS
+    times, because at the rate it belongs on the report a draw would round it away."""
+    roll = rng.random()
+    if roll < AGENT_SMALL_RATE:
+        return rng.randint(2, max(2, AGENT_BOOK_TYPICAL[0] - 1))
+    if roll >= 1.0 - AGENT_LARGE_RATE:
+        return rng.randint(*AGENT_BOOK_LARGE)
+    return rng.randint(*AGENT_BOOK_TYPICAL)
+
+
+def _deal_units(rng: random.Random, units: list[list[tuple]]) -> list[list[list[tuple]]]:
+    """Deal the facility units into agent books, one book per agent group.
+
+    Units are dealt rather than sliced because the structures that matter are multi-row - a tranche
+    pair, an umbrella and a split borrower each have to reach ONE agent, in adjacent rows, the way
+    an agent reports them - and books are filled to a ROW target rather than a unit count, because
+    "the borrowers this agent manages" is what the report prints and what the book size states. A
+    unit is only ever taken while it fits inside what the book still has room for, so an agent drawn
+    a one-facility book gets a plain facility and not half an umbrella.
+
+    Every book gets at least one unit: an agent printed with no facilities beneath it is a header
+    row the extract would carry down onto the NEXT agent's rows. The tail is folded into the last
+    book rather than left to open a group that cannot be filled."""
+    pool = list(units)
+    books: list[list[list[tuple]]] = []
+    while pool:
+        remaining = sum(len(u) for u in pool)
+        # The floored books are dealt first, so neither floor can be eaten by a tail that has run
+        # out of the units it needs. The units are already shuffled and the groups are sorted by
+        # agent name below, so dealing them first puts them nowhere in particular on the report.
+        if len(books) < len(AGENT_BAND_BOOKS):
+            target = AGENT_BAND_BOOKS[len(books)]
+        elif len(books) < len(AGENT_BAND_BOOKS) + AGENT_LARGE_BOOKS:
+            target = rng.randint(*AGENT_BOOK_LARGE)
+        else:
+            target = _agent_book_size(rng)
+        if remaining - target < AGENT_BOOK_TYPICAL[0]:
+            target = remaining          # what is left would not make a book of its own
+        book: list[list[tuple]] = []
+        rows = 0
+        while rows < target:
+            fits = next((i for i, u in enumerate(pool) if len(u) <= target - rows), None)
+            if fits is None:
+                if book:
+                    break               # the book is full enough; the rest goes to the next agent
+                fits = min(range(len(pool)), key=lambda i: len(pool[i]))
+            unit = pool.pop(fits)
+            book.append(unit)
+            rows += len(unit)
+        books.append(book)
+    return books
 
 
 def build_roster() -> tuple[list[tuple], list[tuple[str, str]], list[GroupUmbrella]]:
@@ -670,8 +738,11 @@ def build_roster() -> tuple[list[tuple], list[tuple[str, str]], list[GroupUmbrel
     Facilities are built as UNITS rather than rows, because the structures that matter are
     multi-row: a tranche pair, an umbrella and a split borrower each have to reach the same agent
     group, in adjacent rows, the way an agent reports them. Units are drawn to the quirk shares
-    first and the remainder filled with ordinary facilities, then shuffled and dealt out to agents -
-    so which agent carries the umbrella moves with the seed, but the report always HAS one.
+    first and the remainder filled with ordinary facilities, then shuffled and dealt into agent
+    books (_deal_units) - so which agent carries the umbrella moves with the seed, but the report
+    always HAS one. How many agents the report prints is not drawn: the units are dealt into books
+    of the size an agent actually manages (AGENT_BOOK_TYPICAL), and the agent count is whatever
+    ROSTER_FACILITIES rows come to at that size.
 
     The result is sorted by agent name, as the printed report sorts it, and each group's subtotal
     style is chosen to fit its size (a "pair" band cannot spell a three-row group). Exactly one
@@ -714,13 +785,9 @@ def build_roster() -> tuple[list[tuple], list[tuple[str, str]], list[GroupUmbrel
               for _ in range(max(0, ROSTER_FACILITIES - sum(len(u) for u in units)))]
 
     rng.shuffle(units)
-    groups = max(1, min(rng.randint(*ROSTER_AGENTS), len(units)))
-    dealt = _partition(rng, len(units), groups)
-    blocks: list[list] = []
-    at = 0
-    for agent, count in zip(_mint_agents(rng, groups), dealt):
-        blocks.append([agent, None, [row for unit in units[at:at + count] for row in unit]])
-        at += count
+    dealt = _deal_units(rng, units)
+    blocks: list[list] = [[agent, None, [row for unit in book for row in unit]]
+                          for agent, book in zip(_mint_agents(rng, len(dealt)), dealt)]
 
     # Subtotal bands. The style has to FIT the group - a "pair" band cannot spell three rows - but
     # which fitting style a group gets is not left to the draw: every variant ABS_SUBTOTAL_FORMULA
@@ -1690,11 +1757,41 @@ def validate_roster() -> None:
         problems.append("no borrower is printed under more than one account - the roster states no "
                         "split borrower, so nothing proves a fund name alone does not key a "
                         "facility")
+    sizes = [len(rows) for _a, _s, rows in ABS_ROSTER]
+    # The agent BOOK. An agent bank administering a subscription line manages several borrowers on
+    # it, so a population whose agents each carry one or two facilities is not the report the bank
+    # sends - and it is not a harmless difference either: the agent group is what the extract carries
+    # an agent name down over, and a report of one-row groups exercises that carry-down on nothing.
+    # Half the groups, not a strict majority: the floored books and the two tails are off-band by
+    # construction, so a population that drew a few extra of them is the report's own spread rather
+    # than a shape regression. The check exists to catch a roster whose agents manage a facility or
+    # two apiece, and at that shape it is not close.
+    typical = sum(AGENT_BOOK_TYPICAL[0] <= s <= AGENT_BOOK_TYPICAL[1] for s in sizes)
+    if sizes and typical * 2 < len(sizes):
+        problems.append(f"{typical} of {len(sizes)} agent groups manage "
+                        f"{AGENT_BOOK_TYPICAL[0]}-{AGENT_BOOK_TYPICAL[1]} borrowers - the majority "
+                        "of the agents on the printed report do, so this population states a book "
+                        "of business no agent bank runs")
+    one_row = sizes.count(1)
+    if sizes and one_row * 4 > len(sizes):
+        problems.append(f"{one_row} of {len(sizes)} agent groups manage a single facility - a solo "
+                        "agent is a rarity on the printed report, not the common case")
+    # The floored books, which are floored precisely because a draw rounds them away: the small
+    # groups the subtotal bands are spelled over, and the one large correspondent.
+    minted = Counter(sizes)
+    for size, wanted in Counter(AGENT_BAND_BOOKS).items():
+        if minted[size] < wanted:
+            problems.append(f"the roster states {minted[size]} agent group(s) of {size} facility "
+                            f"row(s) where it floors {wanted} - the subtotal bands 'single', "
+                            "'single_abs' and 'pair' can be spelled over no other group size")
+    if AGENT_LARGE_BOOKS and not any(s > AGENT_BOOK_TYPICAL[1] for s in sizes):
+        problems.append("no agent group manages more than the typical "
+                        f"{AGENT_BOOK_TYPICAL[1]} borrowers - the report's larger correspondents "
+                        "are the groups whose subtotal band spans the most rows")
+
     # Subtotal-band coverage, asserted only where a group of the fitting size exists: a style the
     # population never mints is a shape of band the sample stops proving both scripts skip.
     styles = {style for _a, style, _r in ABS_ROSTER}
-    sizes = [len(rows) for _a, _s, rows in ABS_ROSTER]
-    one_row = sizes.count(1)
     for style, needs in (("single", one_row >= 1), ("single_abs", one_row >= 2),
                          ("pair", 2 in sizes), ("range", sum(s > 1 for s in sizes) >= 2),
                          ("range_one_row_high", any(s > 1 for s in sizes))):

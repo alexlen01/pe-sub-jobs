@@ -325,7 +325,11 @@ class Facility:
     agent: str
     borrower: str
     account: str
-    loan: float
+    # The SYNDICATED line the report prints, not the slice of it the report says UBS holds. The
+    # certificate is the agent's, and an agent certifies a borrowing base against the whole facility
+    # it administers; the LP roster beneath it stands behind that line rather than behind one
+    # lender's share of it.
+    syndicated: float
     maturity: Optional[date]
     status: str
     status_date: Optional[date]
@@ -381,17 +385,19 @@ def load_report_facilities(path: Path) -> list[Facility]:
             continue
         if not borrower or agent is None:
             continue
-        status = str(ws.cell(r, 7).value or "").strip()
+        status = str(ws.cell(r, 8).value or "").strip()
         if ONLY_ACTIVE and status.lower() != "active":
             continue
         facilities.append(Facility(
             agent=agent,
             borrower=str(borrower).strip(),
             account=str(ws.cell(r, 3).value or "").strip(),
-            loan=float(ws.cell(r, 4).value or 0),
-            maturity=_as_date(ws.cell(r, 6).value),
+            # D, the Syndicated Facility. Column E beside it is UBS's own loan amount, which is not
+            # what this certificate is written against - see Facility.syndicated.
+            syndicated=float(ws.cell(r, 4).value or 0),
+            maturity=_as_date(ws.cell(r, 7).value),
             status=status,
-            status_date=_as_date(ws.cell(r, 8).value),
+            status_date=_as_date(ws.cell(r, 9).value),
             bb_date=date.today(),   # replaced from the export's BBDate below
         ))
     wb.close()
@@ -499,9 +505,9 @@ def fold_umbrellas(facilities: list[Facility],
 
     The agent certifies the credit agreement once, so one file covers it however the report printed
     it. The group takes the first printed row's dates and standing — they are the agreement's, and
-    every row on the account restates them — and the whole agreement's line: stated outright where
-    the report printed the group, and the sum of the members' shares where it printed them one by
-    one."""
+    every row on the account restates them — and the whole agreement's syndicated line: stated
+    outright where the report printed the group, and the sum of the members' shares where it printed
+    them one by one."""
     folded: list[Facility] = []
     seen: set[str] = set()
     for fac in facilities:
@@ -517,7 +523,8 @@ def fold_umbrellas(facilities: list[Facility],
             agent=fac.agent,
             borrower=umbrella_name(members, fac.borrower),
             account=fac.account,
-            loan=fac.loan if len(printed) == 1 else _money(sum(f.loan for f in printed)),
+            syndicated=(fac.syndicated if len(printed) == 1
+                        else _money(sum(f.syndicated for f in printed))),
             maturity=fac.maturity,
             status=fac.status,
             status_date=fac.status_date,
@@ -754,7 +761,7 @@ def build_roster(fac: Facility, export_rows: list[dict], rng: random.Random,
         # A facility the report prints but the export cycle carried no positions for. The agent
         # still certifies it; every row on it is new to the bank.
         carried = []
-        commit_scale = max(MIN_UNCALLED, fac.loan / rng.uniform(8, 25))
+        commit_scale = max(MIN_UNCALLED, fac.syndicated / rng.uniform(8, 25))
         new_n = rng.randint(12, 40)
 
     used = {lp.name for lp in carried} | minted_names

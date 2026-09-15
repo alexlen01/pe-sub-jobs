@@ -30,9 +30,9 @@ def check(label: str, actual, expected) -> None:
         failures.append(f"{label}\n    expected: {expected!r}\n    actual:   {actual!r}")
 
 
-def facility(borrower: str, account: str, loan: float = 100_000_000.0,
+def facility(borrower: str, account: str, syndicated: float = 100_000_000.0,
              members: tuple[str, ...] = ()) -> Facility:
-    return Facility(agent="Agent Bank", borrower=borrower, account=account, loan=loan,
+    return Facility(agent="Agent Bank", borrower=borrower, account=account, syndicated=syndicated,
                     maturity=None, status="Active", status_date=None, bb_date=date(2026, 6, 25),
                     members=members)
 
@@ -88,17 +88,17 @@ check("the member's tab is what separates it from its siblings",
 # ── what the report printed is replaced by the group ──────────────────────────
 
 printed = [facility("Ordinary Fund VI", "ACCT9"),
-           *[facility(m, "ACCT2", loan=25_000_000.0) for m in ("Feeder 0", "Feeder 1")],
+           *[facility(m, "ACCT2", syndicated=25_000_000.0) for m in ("Feeder 0", "Feeder 1")],
            facility("Later Fund II", "ACCT8")]
 folded = fold_umbrellas(printed, {"ACCT2": ("Feeder 0", "Feeder 1")})
 check("every printed row on the account collapses into one facility",
       [f.borrower for f in folded], ["Ordinary Fund VI", "Feeder Umbrella", "Later Fund II"])
 check("which stands where the first of them stood, so the run order does not move",
       folded[1].account, "ACCT2")
-check("and carries the whole agreement's line, not one member's share",
-      folded[1].loan, 50_000_000.0)
+check("and carries the whole agreement's syndicated line, not one member's share",
+      folded[1].syndicated, 50_000_000.0)
 check("a facility on an unshared account is untouched",
-      (folded[0].is_umbrella, folded[0].loan), (False, 100_000_000.0))
+      (folded[0].is_umbrella, folded[0].syndicated), (False, 100_000_000.0))
 
 # ── every member reaches the certificate ──────────────────────────────────────
 

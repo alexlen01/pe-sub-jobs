@@ -67,23 +67,26 @@ public class UmbrellaIngestJobConfig {
                 .resource(new FileSystemResource(filePath))
                 .linesToSkip(1)
                 // In the order the extract writes them. The agreement's terms are APPENDED, so a
-                // file written before they existed is short by three cells rather than misaligned;
-                // the lenient tokenizer pads it and the group loads stating nothing about them.
+                // file written before they existed is short a few cells rather than misaligned; the
+                // lenient tokenizer pads it and the group loads stating nothing about them. UBS's
+                // participation is the newest of those appendices, which is why it trails the status
+                // rather than sitting beside the facility size it is a slice of.
                 .lineTokenizer(CsvLineTokenizers.lenientQuotedCsvTokenizer(
                         "key", "name", "agentBank", "accountNumber",
-                        "loanAmount", "crossCollateralized", "creditAgreementRef",
-                        "maturityDate", "collateralDate", "facilityStatus"))
+                        "facilitySize", "crossCollateralized", "creditAgreementRef",
+                        "maturityDate", "collateralDate", "facilityStatus", "ubsParticipation"))
                 .fieldSetMapper(fs -> new UmbrellaRow(
                         fs.readString("key"),
                         fs.readString("name"),
                         fs.readString("agentBank"),
                         fs.readString("accountNumber"),
-                        fs.readString("loanAmount"),
+                        fs.readString("facilitySize"),
                         fs.readString("crossCollateralized"),
                         fs.readString("creditAgreementRef"),
                         fs.readString("maturityDate"),
                         fs.readString("collateralDate"),
-                        fs.readString("facilityStatus")
+                        fs.readString("facilityStatus"),
+                        fs.readString("ubsParticipation")
                 ))
                 .build();
     }

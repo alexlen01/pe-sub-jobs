@@ -68,7 +68,7 @@ public class FacilityIngestJobConfig {
                 // appended, never inserted — an insert would shift every column after it in feeds
                 // already in production.
                 .lineTokenizer(CsvLineTokenizers.lenientQuotedCsvTokenizer(
-                        "agentBank", "name", "accountNumber", "loanAmount",
+                        "agentBank", "name", "accountNumber", "facilitySize",
                         "maturityDate", "status", "statusDate",
                         "ubsParticipation", "collateralDate", "umbrellaName",
                         "umbrellaKey", "umbrellaCrossCollateralized", "creditAgreementRef"))
@@ -76,7 +76,7 @@ public class FacilityIngestJobConfig {
                         fs.readString("agentBank"),
                         fs.readString("name"),
                         fs.readString("accountNumber"),
-                        fs.readString("loanAmount"),
+                        fs.readString("facilitySize"),
                         fs.readString("maturityDate"),
                         fs.readString("status"),
                         fs.readString("statusDate"),

@@ -6,9 +6,10 @@ reference values, reconciled borrowing-base fields, and optional recoverable dat
 variations; the report states the facilities those positions sit on.
 
 Both are rendered from ONE facility roster (ABS_ROSTER), which is why they agree the way the real
-pair does: every account number, borrower name and loan amount in the export is the one the report
-prints for that facility, the export's BB date falls inside the facility's own reported life, and
-each facility's LP pool is apportioned from the loan amount printed beside it. The two deliberate
+pair does: every account number and borrower name in the export is the one the report prints for that
+facility, the export's BB date falls inside the facility's own reported life, and each facility's LP
+pool is apportioned from the SYNDICATED FACILITY printed beside it - the whole line the syndicate
+lends, not the slice of it the report states UBS holds. The two deliberate
 disagreements are ORPHAN_ACCOUNTS - positions on accounts the report omits, which is what keeps the
 ingestion's "Unknown agent" path exercised - and GROUP_UMBRELLAS, the accounts the report prints
 ONCE under the credit agreement's own name, marked "Umbrella" or "[U]" and carrying the stem its
@@ -78,19 +79,22 @@ TARGET_ROWS = 20_000            # lp_records to produce (mirrored tranche rows c
 REPEAT_MIN, REPEAT_MAX = 4, 12  # facilities each LP participates in
 
 # A subscription line is drawn against uncalled capital, so a facility's LP pool is sized FROM its
-# loan amount: the commitment is typically 15-30% of the uncalled capital backing it. Positions
-# used to be drawn free-floating at $2-500M each regardless of which facility they landed on, which
-# made a facility's total nothing but (LP count x $250M) - so "Uncalled to Facility" read 81,982.7%
-# against a $75M loan. Apportioning from loan_amount puts every facility-relative ratio on the
-# Shadow BB screen (Facility LTV, Uncalled to Facility, BB to Facility) in credit-officer range.
+# syndicated facility: the commitment is typically 15-30% of the uncalled capital backing it, and it
+# is the WHOLE line that is so drawn - the LPs stand behind the syndicate's advance, not behind UBS's
+# share of it. Positions used to be drawn free-floating at $2-500M each regardless of which facility
+# they landed on, which made a facility's total nothing but (LP count x $250M) - so "Uncalled to
+# Facility" read 81,982.7% against a $75M line. Apportioning from the syndicated facility puts every
+# facility-relative ratio on the Shadow BB screen (Facility LTV, Uncalled to Facility, BB to
+# Facility) in credit-officer range.
 FACILITY_LTV_MIN, FACILITY_LTV_MAX = 0.15, 0.30
 LP_SKEW_SIGMA = 0.9             # log-normal spread of position size within one facility
 MONEY_STEP = 100_000            # the $100K grid money_short() carries losslessly ("$132.7M")
 MIN_UNCALLED = 200_000          # keep the smallest position clear of that display granularity
-# Row COUNT also scales with the loan amount (it used to be a flat uniform(0.4, 3.2)), so position
-# size stays comparable across facilities instead of a small facility splitting its pool 400 ways.
+# Row COUNT also scales with the syndicated line (it used to be a flat uniform(0.4, 3.2)), so
+# position size stays comparable across facilities instead of a small facility splitting its pool
+# 400 ways.
 FAC_WEIGHT_JITTER = (0.6, 1.6)
-DEFAULT_LOAN_AMOUNT = 140_000_000   # orphan accounts: the summary report does not list them
+DEFAULT_LOAN_AMOUNT = 1_400_000_000   # orphan accounts: the summary report does not list them
 # AccountIDs the report omits -> exercise the "Unknown" agent path. Minted with the roster (see
 # build_roster), so they are drawn from the same vocabulary and can never collide with a printed
 # account. One fund on several accounts, which is the shape the printed report's own orphans take:
@@ -166,11 +170,19 @@ EXPORT_STATES_TRANCHES = True
 TRANCHE_SRC_HEADERS = ["Tranche", "Tranche Of"]
 TRANCHE_SRC_COLS = ["Tranche", "TrancheOf"]
 
-# Agent Bank Summary column layout, which the report header must match exactly. Index 4 is an
-# unnamed spacer holding the report's subtotal amounts.
+# Agent Bank Summary column layout, which the report header must match exactly.
+#
+# The report states TWO amounts per facility, and they are different facts. "Syndicated Facility" is
+# the whole line the syndicate lends - what the agent certifies a borrowing base against, and what
+# every LP position on the facility is apportioned from. "UBS Loan Amount" is the slice UBS holds of
+# that line, which is what the bank is actually exposed for. The report used to print the UBS slice
+# alone under the header "LoanAmount", and the platform read it as the facility's size; it is not.
+#
+# Index 5 is an unnamed spacer holding the report's subtotal amounts, one column right of the UBS
+# amount it totals.
 ABS_COLS = [
-    "Agent", "Borrower", "AccountNumber", "LoanAmount", "", "MaturityDate",
-    "FacilityStatus", "FacilityStatusDate",
+    "Agent", "Borrower", "AccountNumber", "Syndicated Facility", "UBS Loan Amount", "",
+    "MaturityDate", "FacilityStatus", "FacilityStatusDate",
 ]
 ABS_TOTAL_MARKER = "accesstotalsloanamount"   # _norm() prefix of the subtotal / grand-total rows
 ABS_TOTAL_LABEL = "AccessTotalsLoanAmount:"       # per-agent subtotal band
@@ -186,46 +198,49 @@ ABS_GRAND_TOTAL_LABEL = "AccessTotalsLoanAmount1:"  # the single closing band, a
 ABS_FONT = Font(name="Arial", size=10)
 ABS_ROW_HEIGHT = 12.75
 ABS_ZOOM = 110
-ABS_COL_WIDTHS = {                                # A..H, as the printed report sets them
-    "A": 48.421875, "B": 45.7109375, "C": 27.00390625, "D": 24.28125,
-    "E": 21.57421875, "F": 18.421875, "G": 21.8515625, "H": 21.28125,
+ABS_COL_WIDTHS = {                                # A..I, as the printed report sets them
+    "A": 48.421875, "B": 45.7109375, "C": 27.00390625, "D": 24.28125, "E": 24.28125,
+    "F": 21.57421875, "G": 18.421875, "H": 21.8515625, "I": 21.28125,
 }
 ABS_MONEY_FORMAT = r"[$$-409]#,##0.00;[RED]\-[$$-409]#,##0.00"
 ABS_DATE_FORMAT = "mm/dd/yyyy"
-ABS_LOAN_COL = 4                                  # LoanAmount, and the totals bands' own label
-ABS_SPACER_COL = 5                                # unnamed, and empty except on a totals band
-ABS_DATE_COLS = (6, 8)                            # MaturityDate, FacilityStatusDate
-ABS_CENTERED_COLS = (3, 4, 6, 7, 8)               # everything but Agent, Borrower and the spacer
+ABS_SYNDICATED_COL = 4                            # Syndicated Facility: the whole line
+ABS_LOAN_COL = 5                                  # UBS Loan Amount, and the totals bands' own label
+ABS_SPACER_COL = 6                                # unnamed, and empty except on a totals band
+ABS_DATE_COLS = (7, 9)                            # MaturityDate, FacilityStatusDate
+ABS_CENTERED_COLS = (3, 4, 5, 7, 8, 9)            # everything but Agent, Borrower and the spacer
 
-# How each agent group's subtotal band writes its SUM. The report does not write them one way, and
-# the variants are reproduced rather than tidied up because the file the bank sends carries them:
-# a reader that only tolerated one shape would pass here and fail on the real report.
-#   range              - =SUM(D3:D18) over the group's own rows;
-#   pair               - =SUM(D21,D22), the two-row group spelled as two arguments;
-#   single             - =SUM(D25), a one-row group;
-#   single_abs         - =SUM($D28), the same with an absolute column;
-#   range_one_row_high - =SUM(D76:D77) over a group whose rows are 77 and 78. The range is off by
+# How each agent group's subtotal band writes its SUM. The bands total the UBS Loan Amount column -
+# column E - which is the bank's own exposure across an agent's book, not the syndicates' combined
+# lines. The report does not write them one way, and the variants are reproduced rather than tidied
+# up because the file the bank sends carries them: a reader that only tolerated one shape would pass
+# here and fail on the real report.
+#   range              - =SUM(E3:E18) over the group's own rows;
+#   pair               - =SUM(E21,E22), the two-row group spelled as two arguments;
+#   single             - =SUM(E25), a one-row group;
+#   single_abs         - =SUM($E28), the same with an absolute column;
+#   range_one_row_high - =SUM(E76:E77) over a group whose rows are 77 and 78. The range is off by
 #                        one, so the band under-reports its own group by the last row and picks up
 #                        the agent header above it. That is what the printed report states, and the
 #                        subtotal bands are skipped by both scripts, so reproducing the fault costs
 #                        nothing and keeps the sample honest about what arrives.
 ABS_SUBTOTAL_FORMULA = {
-    "range":              lambda a, b: f"=SUM(D{a}:D{b})",
-    "pair":               lambda a, b: f"=SUM(D{a},D{b})",
-    "single":             lambda a, b: f"=SUM(D{a})",
-    "single_abs":         lambda a, b: f"=SUM($D{a})",
-    "range_one_row_high": lambda a, b: f"=SUM(D{a - 1}:D{b - 1})",
+    "range":              lambda a, b: f"=SUM(E{a}:E{b})",
+    "pair":               lambda a, b: f"=SUM(E{a},E{b})",
+    "single":             lambda a, b: f"=SUM(E{a})",
+    "single_abs":         lambda a, b: f"=SUM($E{a})",
+    "range_one_row_high": lambda a, b: f"=SUM(E{a - 1}:E{b - 1})",
 }
 
 # ── the facility roster: the one model BOTH output files are rendered from ───────────────────
-# ABS_ROSTER is [(agent bank, subtotal style, [(borrower, account number, loan amount, maturity,
-# facility status, facility status date), ...]), ...], in the printed report's own order: agents
-# alphabetical, facilities in the order the agent lists them.
+# ABS_ROSTER is [(agent bank, subtotal style, [(borrower, account number, syndicated facility, UBS
+# loan amount, maturity, facility status, facility status date), ...]), ...], in the printed report's
+# own order: agents alphabetical, facilities in the order the agent lists them.
 #
 # This roster IS the Agent Bank Summary report, and it is also the entire universe of facilities the
 # LP DB Export may place a position on. Holding it here rather than reading it back out of the
 # rendered workbook is what makes the pair cohesive by construction: the export cannot name an
-# account the report does not print, the report cannot print a loan amount the export was not
+# account the report does not print, the report cannot print a syndicated facility the export was not
 # apportioned from, and neither file can drift when the other is regenerated. Every LP record the
 # export writes therefore joins to a printed facility - bar the deliberate orphans, which are the
 # whole point of ORPHAN_COUNT.
@@ -305,7 +320,15 @@ NAME_TRUNCATE_RATE = 0.015
 NAME_MISSPELL_RATE = 0.015
 NAME_TRAILING_RATE = 0.015
 NAME_TRUNCATE_LEN = 43          # the printed report's own truncation point, to the character
-ODD_LOAN_RATE = 0.30            # loan amounts that are a pro-rata slice of a line, not a round one
+ODD_LOAN_RATE = 0.30            # syndicated lines that are a pro-rata slice of one, not a round one
+
+# What the bank holds of each syndicated line, which is the second amount the report prints. These
+# lines are syndicated: UBS takes a slice beside the other lenders, and the two amounts are NEVER
+# equal. A sole-lender shape used to be minted at 28%, which printed the two columns identical on
+# better than a quarter of the roster - and a row where the whole equals the part is the one row a
+# reader who conflates the two columns gets right, so the sample was hiding the very error it exists
+# to expose. validate_roster now fails the run on an equal pair.
+UBS_SHARE_RANGE = (0.15, 0.25)  # UBS's slice as a fraction of the syndicated line
 
 # Name parts. Deliberately invented: the shapes are the printed report's, the words are not anyone's.
 AGENT_STEMS = (
@@ -341,10 +364,16 @@ FUND_STRATEGIES = (
 UMBRELLA_MEMBER_SUFFIXES = ("Fund", "Feeder", "SPV", "Master Fund", "AIF", "Offshore", "Co-Invest")
 SERIES_ROMAN = ("II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII", "XIV", "XV")
 LEGAL_SUFFIXES = ("", "", "", "", " LP", " L.P.", ", LP", " LLC")
-# Round lines on a $25M grid, plus the odd sizes the printed report actually carries.
-LOAN_GRID = tuple(range(25_000_000, 401_000_000, 25_000_000)) + (
-    45_000_000, 75_000_000, 87_500_000, 112_000_000, 132_500_000, 135_000_000, 165_000_000,
-    175_000_000, 215_000_000, 240_000_000, 245_000_000, 273_000_000, 292_000_000,
+# Round lines on a $250M grid, plus the odd sizes the printed report actually carries.
+#
+# Syndicated subscription lines run to the billions: the whole line is what the syndicate lends, not
+# what UBS holds of it, and the roster used to be cut an order of magnitude below that - a $25M-$400M
+# grid, which is the range a PARTICIPATION sits in. The low end still carries hundreds of millions,
+# because a fund of that size borrows a line of that size, and the deepest are several billion.
+LOAN_GRID = tuple(range(250_000_000, 4_001_000_000, 250_000_000)) + (
+    450_000_000, 750_000_000, 875_000_000, 1_120_000_000, 1_325_000_000, 1_350_000_000,
+    1_650_000_000, 1_750_000_000, 2_150_000_000, 2_400_000_000, 2_450_000_000, 2_730_000_000,
+    2_920_000_000,
 )
 
 
@@ -503,7 +532,7 @@ def _facility_dates(rng: random.Random) -> tuple[str, str]:
 
 
 def _loan_amount(rng: random.Random) -> int:
-    """One loan amount: a round line most of the time, a pro-rata slice of one otherwise.
+    """One syndicated facility: a round line most of the time, a pro-rata slice of one otherwise.
 
     The printed report carries both - $75,000,000 beside $73,076,924 - because a line syndicated or
     stepped down mid-term prints whatever the arithmetic produced. The odd amounts matter to the
@@ -516,17 +545,38 @@ def _loan_amount(rng: random.Random) -> int:
     return base
 
 
-def _facility_row(name: str, acct: str, loan: int, maturity: str, status_date: str) -> tuple:
+def _ubs_loan_amount(rng: random.Random, syndicated: int) -> int:
+    """What UBS holds of one syndicated line, on the report's own $100K grid.
+
+    A slice of the line and never the whole of it: UBS_SHARE_RANGE keeps the pair a whole and its
+    part on every row, so no facility prints the two columns equal and no reader can take one for the
+    other. Floored a grid step below the line for the same reason, which only ever binds on a line
+    small enough for the $100K snap to round a quarter of it up to all of it."""
+    share = rng.uniform(*UBS_SHARE_RANGE)
+    snapped = max(1_000_000, int(round(syndicated * share / 100_000)) * 100_000)
+    return min(snapped, syndicated - 100_000)
+
+
+def _amounts(rng: random.Random) -> tuple[int, int]:
+    """(syndicated facility, UBS loan amount) for one facility, drawn together so no call site can
+    mint a participation against a line other than its own."""
+    syndicated = _loan_amount(rng)
+    return syndicated, _ubs_loan_amount(rng, syndicated)
+
+
+def _facility_row(name: str, acct: str, syndicated: int, ubs_loan: int, maturity: str,
+                  status_date: str) -> tuple:
     """One printed facility row. Every facility the report prints is reported Active: an agent
     listing a facility on its summary is what "active" MEANS here, and the extract reads the status
     straight off this column."""
-    return (name, acct, loan, maturity, "Active", status_date)
+    return (name, acct, syndicated, ubs_loan, maturity, "Active", status_date)
 
 
 def _unit_plain(rng: random.Random, accts: set[str], names: set[str]) -> list[tuple]:
     """One ordinary facility: one borrower, one account, on its own."""
     maturity, status = _facility_dates(rng)
-    return [_facility_row(_mint_name(rng, names), _mint_account(rng, accts), _loan_amount(rng),
+    syndicated, ubs_loan = _amounts(rng)
+    return [_facility_row(_mint_name(rng, names), _mint_account(rng, accts), syndicated, ubs_loan,
                  maturity, status)]
 
 
@@ -555,12 +605,13 @@ def _unit_tranche(rng: random.Random, accts: set[str], names: set[str],
     names.update((_norm(committed), _norm(uncommitted)))
     first, second = _mint_account_pair(rng, accts)
     maturity, status = _facility_dates(rng)
-    loan = _loan_amount(rng)
+    syndicated, ubs_loan = _amounts(rng)
     # The accordion is sized independently of the committed line about half the time, as the printed
-    # report shows it: Arctos prints both sleeves at $100,480,770, Audax at $120M and $180M.
-    rows = [_facility_row(committed, first, loan, maturity, status),
-            _facility_row(uncommitted, second, loan if rng.random() < 0.5 else _loan_amount(rng),
-                 maturity, status)]
+    # report shows it: Arctos prints both sleeves at $100,480,770, Audax at $120M and $180M. The UBS
+    # slice is redrawn with it - the bank takes each sleeve on its own allocation.
+    second_amounts = (syndicated, ubs_loan) if rng.random() < 0.5 else _amounts(rng)
+    rows = [_facility_row(committed, first, syndicated, ubs_loan, maturity, status),
+            _facility_row(uncommitted, second, *second_amounts, maturity, status)]
     rng.shuffle(rows)     # the report does not list the sleeves in a fixed order
     return rows
 
@@ -570,7 +621,7 @@ def _unit_umbrella(rng: random.Random, accts: set[str], names: set[str], members
 
     A fund, its feeder and its SPV borrow under one credit agreement, which is why the agent reports
     them against a single account number - so they share the account and the credit agreement's
-    dates, and each keeps its own loan amount and its own LP roster. This is the structure the
+    dates, and each keeps its own pair of amounts and its own LP roster. This is the structure the
     extract groups on the account number, and it is the exact opposite of the split borrower below,
     which shares a NAME across accounts and must never be grouped."""
     acct = _mint_account(rng, accts)
@@ -579,7 +630,7 @@ def _unit_umbrella(rng: random.Random, accts: set[str], names: set[str], members
     maturity, status = _facility_dates(rng)
     return [_facility_row(_mint_name(rng, names, sponsor=sponsor, strategy=f"{strategy} {suffix}",
                             damage=False),
-                 acct, _loan_amount(rng), maturity, status)
+                 acct, *_amounts(rng), maturity, status)
             for suffix in rng.sample(UMBRELLA_MEMBER_SUFFIXES, members)]
 
 
@@ -589,14 +640,20 @@ class GroupUmbrella:
 
     `obligor` is printed by the report and is NOT a facility - it has no LP roster of its own, and
     the export never names it. `members` are facilities on the same account and are named by the
-    export alone. `loan_amount` is the whole agreement's line, as printed; each member carries its
-    own share of it."""
+    export alone. `facility_size` is the whole agreement's syndicated line, as printed, and
+    `ubs_loan` the bank's slice of it; each member carries its own share of the line.
+
+    Only the syndicated line is divided here, because that is what the members' LP positions are
+    apportioned out of. The bank's slice stays whole on the agreement: dividing UBS's exposure by
+    member is the platform's job, which umbrella governance does at read time from the member's
+    allocated share."""
     account: str
     obligor: str
-    loan_amount: int
+    facility_size: int
+    ubs_loan: int
     maturity: str
     status_date: str
-    members: tuple[tuple[str, int], ...]   # (fund name, its share of the line)
+    members: tuple[tuple[str, int], ...]   # (fund name, its share of the syndicated line)
 
 
 def _unit_group_umbrella(rng: random.Random, accts: set[str], names: set[str],
@@ -621,7 +678,7 @@ def _unit_group_umbrella(rng: random.Random, accts: set[str], names: set[str],
     apportion out of the amount the report prints for the account."""
     acct = _mint_account(rng, accts)
     maturity, status_date = _facility_dates(rng)
-    loan = _loan_amount(rng)
+    syndicated, ubs_loan = _amounts(rng)
     for _ in range(400):
         sponsor = _mint_sponsor(rng)
         strategy = rng.choice(FUND_STRATEGIES)
@@ -635,13 +692,13 @@ def _unit_group_umbrella(rng: random.Random, accts: set[str], names: set[str],
 
     weights = [rng.uniform(0.5, 2.0) for _ in range(members)]
     total = sum(weights)
-    shares = [max(1_000_000, int(loan * w / total)) for w in weights]
+    shares = [max(1_000_000, int(syndicated * w / total)) for w in weights]
     funds = tuple(
         (_mint_name(rng, names, sponsor=sponsor, strategy=f"{strategy} {suffix}", damage=False),
          share)
         for suffix, share in zip(rng.sample(UMBRELLA_MEMBER_SUFFIXES, members), shares))
-    return ([_facility_row(obligor, acct, loan, maturity, status_date)],
-            GroupUmbrella(acct, obligor, loan, maturity, status_date, funds))
+    return ([_facility_row(obligor, acct, syndicated, ubs_loan, maturity, status_date)],
+            GroupUmbrella(acct, obligor, syndicated, ubs_loan, maturity, status_date, funds))
 
 
 def _unit_split(rng: random.Random, accts: set[str], names: set[str]) -> list[tuple]:
@@ -657,8 +714,12 @@ def _unit_split(rng: random.Random, accts: set[str], names: set[str]) -> list[tu
     major = max(1_000_000, int(total * rng.uniform(0.55, 0.90)))
     minor = max(1_000_000, total - major)
     later = (date.fromisoformat(status) - timedelta(days=rng.randint(0, 2))).isoformat()
-    return [_facility_row(name, _mint_account(rng, accts), major, maturity, status),
-            _facility_row(name, _mint_account(rng, accts), minor, maturity, later)]
+    # Two agreements, so UBS's slice is drawn against each line on its own - the bank is not
+    # necessarily in for the same fraction of both, and neither slice may exceed its own line.
+    return [_facility_row(name, _mint_account(rng, accts), major, _ubs_loan_amount(rng, major),
+                 maturity, status),
+            _facility_row(name, _mint_account(rng, accts), minor, _ubs_loan_amount(rng, minor),
+                 maturity, later)]
 
 
 def _unit_reprint(rng: random.Random, accts: set[str], names: set[str]) -> list[tuple]:
@@ -669,9 +730,9 @@ def _unit_reprint(rng: random.Random, accts: set[str], names: set[str]) -> list[
     the first, so this renders as two rows and reads as one facility; the export never places
     positions on the second."""
     row = _unit_plain(rng, accts, names)[0]
-    name, acct, loan, maturity, _status, status_date = row
+    name, acct, syndicated, ubs_loan, maturity, _status, status_date = row
     restated = (date.fromisoformat(status_date) - timedelta(days=rng.randint(0, 1))).isoformat()
-    return [row, _facility_row(name, acct, loan, maturity, restated)]
+    return [row, _facility_row(name, acct, syndicated, ubs_loan, maturity, restated)]
 
 
 def _agent_book_size(rng: random.Random) -> int:
@@ -1560,13 +1621,13 @@ GROUP_OBLIGORS = {(g.account, _norm(g.obligor)) for g in GROUP_UMBRELLAS}
 
 
 def load_facilities() -> list[tuple[str, str, int, str | None, str | None]]:
-    """(account number, borrower name, loan amount, maturity date, facility status date) per
+    """(account number, borrower name, syndicated facility, maturity date, facility status date) per
     facility the roster states, plus ORPHAN_ACCOUNTS.
 
     This is the export's whole facility universe, and it is read out of ABS_ROSTER - the same model
     write_agent_bank_summary renders the report from - so a position can only ever land on an
-    account the report prints, at the loan amount printed beside it. The rendered report is not read
-    back to obtain it: reading a file this script had just written would make the pair agree by
+    account the report prints, at the syndicated line printed beside it. The rendered report is not
+    read back to obtain it: reading a file this script had just written would make the pair agree by
     coincidence of timing rather than by construction, and would lose exactly the rows the roster
     keeps deliberately (a reprint collapses on the way in, so it would stop being reprinted).
 
@@ -1577,15 +1638,18 @@ def load_facilities() -> list[tuple[str, str, int, str | None, str | None]]:
     of them is what every per-facility figure below is grouped by. The name is carried exactly as
     PRINTED, because that is what the export's FndName has to join back to.
 
-    The loan amount is what every position on the facility is apportioned from, so a facility that
-    states none falls back to DEFAULT_LOAN_AMOUNT rather than to zero. The two dates are the
-    facility's reported life, which is the window its BB run has to fall inside; the orphans carry
-    neither, because no report row states one for them.
+    The amount taken is the SYNDICATED FACILITY, never the UBS slice beside it. A facility's LP pool
+    backs the whole line the syndicate lends - the agent certifies the borrowing base against that,
+    and every LP position on the facility is apportioned out of it - so sizing the pool from UBS's
+    own participation would understate each facility's collateral by the share the other lenders
+    hold. A facility that states no line falls back to DEFAULT_LOAN_AMOUNT rather than to zero. The
+    two dates are the facility's reported life, which is the window its BB run has to fall inside;
+    the orphans carry neither, because no report row states one for them.
     """
     out: list[tuple[str, str, int, str | None, str | None]] = []
     seen: set[tuple[str, str]] = set()
     for _agent, _style, rows in ABS_ROSTER:
-        for name, acct, loan, maturity, _status, status_date in rows:
+        for name, acct, syndicated, _ubs_loan, maturity, _status, status_date in rows:
             if not name or not acct or (acct, _norm(name)) in seen:
                 continue
             # An obligor row names the credit agreement, not a borrower: the funds that draw on it
@@ -1594,7 +1658,7 @@ def load_facilities() -> list[tuple[str, str, int, str | None, str | None]]:
             if (acct, _norm(name)) in GROUP_OBLIGORS:
                 continue
             seen.add((acct, _norm(name)))
-            out.append((acct, name, int(loan) or DEFAULT_LOAN_AMOUNT, maturity, status_date))
+            out.append((acct, name, int(syndicated) or DEFAULT_LOAN_AMOUNT, maturity, status_date))
     # The member funds of a group-level umbrella: real facilities on a printed account, each with
     # its own LP roster and its own share of the printed line, and named by the export alone.
     for group in GROUP_UMBRELLAS:
@@ -1651,12 +1715,21 @@ def validate_roster() -> None:
                             f"{len(rows)}")
         if not rows:
             problems.append(f"agent group {agent!r} lists no facilities")
-        for name, acct, loan, maturity, status, status_date in rows:
+        for name, acct, syndicated, ubs_loan, maturity, status, status_date in rows:
             if not name or not acct:
                 problems.append(f"agent group {agent!r} has a row with no borrower or account")
                 continue
-            if int(loan) <= 0:
-                problems.append(f"facility {name!r} ({acct}) states loan amount {loan}")
+            if int(syndicated) <= 0:
+                problems.append(f"facility {name!r} ({acct}) states syndicated facility {syndicated}")
+            if int(ubs_loan) <= 0:
+                problems.append(f"facility {name!r} ({acct}) states UBS loan amount {ubs_loan}")
+            # UBS holds a SLICE of the line, so its amount is strictly below it: more than the
+            # syndicate lends is impossible, and exactly what it lends is the one row on which
+            # conflating the two columns gives the right answer. Both are failures here, because a
+            # sample that prints either teaches a reader the two figures are interchangeable.
+            if int(ubs_loan) >= int(syndicated):
+                problems.append(f"facility {name!r} ({acct}) states UBS loan amount {ubs_loan} "
+                                f"against a syndicated facility of {syndicated}")
             for label, value in (("maturity", maturity), ("status date", status_date)):
                 try:
                     date.fromisoformat(value)
@@ -1723,7 +1796,7 @@ def validate_roster() -> None:
                                 "so its group's row would match it and never read as a group")
             if share <= 0:
                 problems.append(f"member fund {fund!r} ({group.account}) states share {share}")
-        if sum(share for _f, share in group.members) > group.loan_amount:
+        if sum(share for _f, share in group.members) > group.facility_size:
             problems.append(f"group umbrella {group.obligor!r} allocates more to its members than "
                             "the line the report prints for the account")
     if not any(tranche_of(name) for _a, _s, rows in ABS_ROSTER for name, *_ in rows):
@@ -1809,12 +1882,17 @@ def write_agent_bank_summary(bbdates: dict[tuple[str, str], str]) -> tuple[int, 
 
     The layout is the printed report's, band for band, because lp_db_extract reads THIS file and a
     tidied-up rendering would be a sample of a report the bank never sends:
-      * one header row, with the LoanAmount subtotal column left unnamed;
+      * one header row, with the subtotal column left unnamed;
       * per agent, a group-header row carrying the agent alone (Borrower blank, which is what marks
         it as a header and lets the agent be carried down onto the rows beneath it), then one row
-        per facility with the Agent cell EMPTY, then an "AccessTotalsLoanAmount:" band whose amount
-        sits in the unnamed column;
+        per facility with the Agent cell EMPTY, then an "AccessTotalsLoanAmount:" band whose label
+        sits in the UBS Loan Amount column and whose amount sits in the unnamed column beside it;
       * one closing "AccessTotalsLoanAmount1:" band over the whole report.
+
+    The bands total the UBS Loan Amount, not the syndicated lines above them: the report's totals are
+    what the BANK is in for across an agent's book, which is the figure the agent footed the column
+    with before either amount had a column of its own, and it stays that figure now that the
+    syndicated line is printed beside it.
 
     The subtotal bands are written as live formulas over the rows they actually cover, so the file
     recalculates in Excel; the closing band is written as a literal, as the printed report writes
@@ -1837,14 +1915,14 @@ def write_agent_bank_summary(bbdates: dict[tuple[str, str], str]) -> tuple[int, 
         """One report row, styled the way the printed report styles that KIND of row.
 
         The money mask sits on the cells that hold money, which is not the same as sitting on a
-        column: the LoanAmount column carries it everywhere except on a totals band, where that
-        cell holds the band's label instead, and the unnamed spacer carries it only ON a totals
-        band, which is the one place it holds anything. The spacer's centring follows the same
+        column: the two amount columns carry it everywhere except on a totals band, where the UBS
+        Loan Amount cell holds the band's label instead, and the unnamed spacer carries it only ON a
+        totals band, which is the one place it holds anything. The spacer's centring follows the same
         rule, for the same reason."""
         for col, value in enumerate(values, start=1):
             cell = ws.cell(row_no, col, value)
             cell.font = ABS_FONT
-            if col == ABS_LOAN_COL and not totals_band:
+            if col in (ABS_SYNDICATED_COL, ABS_LOAN_COL) and not totals_band:
                 cell.number_format = ABS_MONEY_FORMAT
             elif col == ABS_SPACER_COL and totals_band:
                 cell.number_format = ABS_MONEY_FORMAT
@@ -1864,20 +1942,20 @@ def write_agent_bank_summary(bbdates: dict[tuple[str, str], str]) -> tuple[int, 
     facility_rows = 0
     grand_total = 0
     for agent, style, rows in ABS_ROSTER:
-        put(row_no, [agent, None, None, None, None, None, None, None])
+        put(row_no, [agent, None, None, None, None, None, None, None, None])
         row_no += 1
         first = row_no
-        for name, acct, loan, maturity, status, status_date in rows:
-            put(row_no, [None, name, acct, int(loan), None,
+        for name, acct, syndicated, ubs_loan, maturity, status, status_date in rows:
+            put(row_no, [None, name, acct, int(syndicated), int(ubs_loan), None,
                          date.fromisoformat(maturity), status, date.fromisoformat(status_date)])
-            grand_total += int(loan)
+            grand_total += int(ubs_loan)
             facility_rows += 1
             row_no += 1
-        put(row_no, [None, None, None, ABS_TOTAL_LABEL,
+        put(row_no, [None, None, None, None, ABS_TOTAL_LABEL,
                      ABS_SUBTOTAL_FORMULA[style](first, row_no - 1), None, None, None],
             totals_band=True)
         row_no += 1
-    put(row_no, [None, None, None, ABS_GRAND_TOTAL_LABEL, grand_total, None, None, None],
+    put(row_no, [None, None, None, None, ABS_GRAND_TOTAL_LABEL, grand_total, None, None, None],
         totals_band=True)
 
     verify_bbdates_within_facility_life(bbdates)
@@ -1895,7 +1973,7 @@ def verify_bbdates_within_facility_life(bbdates: dict[tuple[str, str], str]) -> 
     disagreeing with itself in the one column that joins them."""
     lives = {(acct, name): (maturity, status_date)
              for _a, _s, rows in ABS_ROSTER
-             for name, acct, _loan, maturity, _status, status_date in rows}
+             for name, acct, _syndicated, _ubs_loan, maturity, _status, status_date in rows}
     # A member of a group-level umbrella is unprinted but not undated: the agreement's own life is
     # the window its BB run is certified inside, so it is held to that rather than skipped.
     lives.update({(g.account, fund): (g.maturity, g.status_date)
@@ -2237,7 +2315,7 @@ def main() -> int:
     validate_chaos_vocabularies()     # before a single row is built, let alone written
     validate_roster()                 # and before the roster is rendered as either file
     random.seed(SEED)
-    facilities = load_facilities()    # [(acct, fund, loan, maturity, status_date), ...]
+    facilities = load_facilities()    # [(acct, fund, syndicated, maturity, status_date), ...]
     base = AS_OF                      # the sample's as-of date: no BB run is dated after it
     # One BBDate per facility, drawn inside the life the report states for it, so the collateral
     # date the export carries describes the facility the report prints rather than floating free of
@@ -2245,9 +2323,9 @@ def main() -> int:
     # separately - and so do the two sleeves of one Credit Agreement, whose mirrored rows take the
     # sleeve's own date in the mirror pass below.
     fac_bbdate = {facility_key(acct, fund): facility_bbdate(maturity, status_date, base)
-                  for acct, fund, _loan, maturity, status_date in facilities}
+                  for acct, fund, _size, maturity, status_date in facilities}
 
-    fac_loan = {facility_key(acct, fund): loan for acct, fund, loan, *_ in facilities}
+    fac_size = {facility_key(acct, fund): size for acct, fund, size, *_ in facilities}
 
     # The sleeves of one Credit Agreement are TWO facilities over ONE LP roster, so they are drawn
     # ONCE: the committed sleeve leads the draw and every other sleeve mirrors the positions it
@@ -2257,14 +2335,14 @@ def main() -> int:
 
     # Both sleeves are advanced against the SAME uncalled capital - one pool of LP commitments
     # pledged under one Credit Agreement - so the pool a group is apportioned from is sized off the
-    # group's COMBINED loan amount, not the lead sleeve's alone. A $120M committed line beside a
-    # $180M accordion is $300M of potential draw against one collateral pool, and sizing it from
+    # group's COMBINED syndicated facility, not the lead sleeve's alone. A $120M committed line beside
+    # a $180M accordion is $300M of potential draw against one collateral pool, and sizing it from
     # $120M would leave the accordion reading as if it were over-collateralized twice over.
-    group_loan = {lead: fac_loan[lead] + sum(fac_loan[s] for s in tranche_siblings[lead])
+    group_size = {lead: fac_size[lead] + sum(fac_size[s] for s in tranche_siblings[lead])
                   for lead in leads}
-    # How many positions a facility draws is proportional to its loan amount, so a $400M facility
-    # carries a deeper LP list than an $8M one and the two still hold comparable position sizes.
-    fac_weights = {fk: group_loan[fk] * random.uniform(*FAC_WEIGHT_JITTER) for fk in leads}
+    # How many positions a facility draws is proportional to its syndicated line, so a $4B facility
+    # carries a deeper LP list than a $250M one and the two still hold comparable position sizes.
+    fac_weights = {fk: group_size[fk] * random.uniform(*FAC_WEIGHT_JITTER) for fk in leads}
 
     used_names: set = set()
     # Sponsor names an SPV may roll up to. Filled with each non-SPV as it is built, so a feeder can
@@ -2302,15 +2380,15 @@ def main() -> int:
             per_fac[fk].append(row)
             rows_placed += 1 + len(tranche_siblings[fk])
 
-    # Apportioning pass: size each facility's LP pool from its loan amount. A subscription line is
-    # advanced against uncalled capital at FACILITY_LTV, so the pool backing a facility is its loan
-    # amount grossed up by that fraction, split across its positions on the log-normal weights drawn
-    # above. Commitment follows from the position's own uncalled ratio, and called capital is the
-    # remainder — the identity commit = called + uncalled that verify_reconciliation checks.
+    # Apportioning pass: size each facility's LP pool from its syndicated facility. A subscription
+    # line is advanced against uncalled capital at FACILITY_LTV, so the pool backing a facility is
+    # that line grossed up by that fraction, split across its positions on the log-normal weights
+    # drawn above. Commitment follows from the position's own uncalled ratio, and called capital is
+    # the remainder — the identity commit = called + uncalled that verify_reconciliation checks.
     for fk, rows in per_fac.items():
         if not rows:
             continue
-        target_uncalled = group_loan[fk] / random.uniform(FACILITY_LTV_MIN, FACILITY_LTV_MAX)
+        target_uncalled = group_size[fk] / random.uniform(FACILITY_LTV_MIN, FACILITY_LTV_MAX)
         tot_w = sum(r["size_w"] for r in rows)
         for r in rows:
             uncalled = snap_money(target_uncalled * r["size_w"] / tot_w, MIN_UNCALLED)
@@ -2454,7 +2532,7 @@ def main() -> int:
     unplaced = sorted(fk[1] for fk, rows in per_fac.items() if not rows)
     print(f"wrote {ABS_OUT}")
     print(f"  facility rows printed     : {abs_rows} under {len(ABS_ROSTER)} agent bank(s)")
-    print(f"  loan amount (grand total) : ${abs_total:,}")
+    print(f"  UBS loan amt (grand total): ${abs_total:,}")
     if unplaced:
         # Not an error: the report is the bank's record of what it lends against, and a live
         # facility the export cycle simply did not carry LPs for is an empty facility, not a
@@ -2483,7 +2561,7 @@ def main() -> int:
         print(f"    {acct:<12}: {', '.join(sorted(funds))}")
     for group in GROUP_UMBRELLAS:
         print(f"  group-level umbrella      : {group.account} is printed ONCE as "
-              f"{group.obligor!r} at ${group.loan_amount:,}; its "
+              f"{group.obligor!r} at ${group.facility_size:,}; its "
               f"{len(group.members)} funds are named by the export alone")
     print(f"  LPs/facility  min/med/max : {fac_sizes[0]} / {fac_sizes[len(fac_sizes)//2]} / {fac_sizes[-1]}")
     print(f"  avg repeats per LP        : {len(positions)/investor_count:.1f}")

@@ -17,7 +17,7 @@ public class FacilityRowProcessor implements ItemProcessor<FacilityRow, Processe
                 blankToNull(item.agentBank()),
                 blankToNull(item.name()),
                 blankToNull(item.accountNumber()),
-                parseDecimal(item.loanAmount()),
+                parseDecimal(item.facilitySize()),
                 parseDate(item.maturityDate()),
                 blankToNull(item.status()),
                 parseDecimal(item.ubsParticipation()),

@@ -21,7 +21,7 @@ public record UmbrellaRow(
         // report.
         String accountNumber,
         // The whole agreement's line, as printed over the group.
-        String loanAmount,
+        String facilitySize,
         // "true" where the members stand on ONE borrowing base. Blank where the feed cannot know,
         // which is every group but the sleeves of a multi-tranche facility.
         String crossCollateralized,
@@ -40,5 +40,8 @@ public record UmbrellaRow(
         // The group's standing, and the switch that makes it govern at all. The extract states
         // Active for every group it finds and Inactive where the agent printed otherwise; it never
         // writes "Not Stated", which is what an unfed group already reads as.
-        String facilityStatus
+        String facilityStatus,
+        // UBS's own slice of the agreement's line. Last because the feed appends columns and never
+        // inserts them, so it sits after the status rather than beside the size it is a part of.
+        String ubsParticipation
 ) {}

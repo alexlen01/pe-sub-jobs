@@ -7,7 +7,7 @@ public record ProcessedFacility(
         String agentBank,
         String name,
         String accountNumber,
-        BigDecimal loanAmount,
+        BigDecimal facilitySize,
         LocalDate maturityDate,
         String status,
         BigDecimal ubsParticipation,

@@ -32,8 +32,9 @@ from lp_db_extract import (  # noqa: E402
     legacy_sleeve_reading, upsert_facilities, write_umbrellas,
 )
 
-AGENT, NAME, ACCT, LOAN, MATURITY, STATUS = 0, 1, 2, 3, 4, 5
+AGENT, NAME, ACCT, SIZE, MATURITY, STATUS = 0, 1, 2, 3, 4, 5
 COLLATERAL = FACILITY_WORK_COLS.index("collateral_date")
+UBS_PART = FACILITY_WORK_COLS.index("ubs_participation")
 UMBRELLA, KEY, XCOLL = 9, 10, 11
 TRANCHE_TYPE = FACILITY_WORK_COLS.index("tranche_type")
 TRANCHE_OF = FACILITY_WORK_COLS.index("tranche_of")
@@ -47,11 +48,12 @@ def check(label: str, actual, expected) -> None:
         failures.append(f"{label}\n    expected: {expected!r}\n    actual:   {actual!r}")
 
 
-def printed_over(account: str, name: str = "The Agreement", loan: str = "", maturity: str = "",
-                 status: str = "Active", agreement_ref: str = "") -> dict[str, StatedGroup]:
+def printed_over(account: str, name: str = "The Agreement", size: str = "", maturity: str = "",
+                 status: str = "Active", agreement_ref: str = "",
+                 ubs: str = "") -> dict[str, StatedGroup]:
     """The `stated` map for an account the report printed an umbrella row over."""
-    return {account: StatedGroup(account, name, "Ashford Bank", loan, maturity, status, "",
-                                 agreement_ref=agreement_ref)}
+    return {account: StatedGroup(account, name, "Ashford Bank", size, maturity, status, "",
+                                 ubs_participation=ubs, agreement_ref=agreement_ref)}
 
 
 def facility(name: str, account: str, agreement_ref: str = "") -> list[str]:
@@ -181,15 +183,16 @@ check("and the sleeve on its own account joins nothing", rows[1][UMBRELLA], "")
 # The shape a real Agent Bank Summary carries for an umbrella: ONE row for the account, naming the
 # obligor that signs, with the funds beneath it appearing only in the export. Before this was
 # recognised, the positional pass handed that row to whichever fund the export happened to list
-# first - giving one arbitrary fund the group's name, the group's whole loan amount and Active
+# first - giving one arbitrary fund the group's name, the group's whole line and Active
 # standing, and leaving its siblings as Unknown/Inactive placeholders.
 
-def report_row(agent: str, borrower: str, acct: str, loan: str = "", maturity: str = "",
-               status: str = "Active") -> list[str]:
+def report_row(agent: str, borrower: str, acct: str, size: str = "", maturity: str = "",
+               status: str = "Active", ubs: str = "") -> list[str]:
     """An Agent Bank Summary row as read_agent_bank_summary emits it."""
     row = [""] * len(FACILITY_WORK_COLS)
     row[AGENT], row[NAME], row[ACCT] = agent, borrower, acct
-    row[LOAN], row[MATURITY], row[STATUS] = loan, maturity, status
+    row[SIZE], row[MATURITY], row[STATUS] = size, maturity, status
+    row[UBS_PART] = ubs
     return row
 
 
@@ -212,7 +215,8 @@ CARLYLE = ["Carlyle CGFSP III", "Carlyle CGP", "Carlyle CGP II",
            "Carlyle CP Growth", "Carlyle VII", "Carlyle VIII"]
 
 fac_data, by_acct = report([report_row("Wells Fargo", "Carlyle Buyout Umbrella", "5VZ8873",
-                                       loan="1500000000", maturity="2029-03-31")])
+                                       size="1500000000", maturity="2029-03-31",
+                                       ubs="420000000")])
 rows, name_by_key, stated = upsert_facilities(
     fac_data, by_acct, [export_row("5VZ8873", f) for f in CARLYLE])
 
@@ -225,12 +229,14 @@ check("no fund is banked to Unknown - the report states the agent at group level
       {r[AGENT] for r in rows}, {"Wells Fargo"})
 check("no fund is Inactive - the export carries a live roster against each",
       {r[STATUS] for r in rows}, {"Active"})
-check("the agreement's loan amount is not stamped on any fund",
-      {r[LOAN] for r in rows}, {""})
+check("neither of the agreement's amounts is stamped on any fund",
+      ({r[SIZE] for r in rows}, {r[UBS_PART] for r in rows}), ({""}, {""}))
 check("the group's maturity is carried down", {r[MATURITY] for r in rows}, {"2029-03-31"})
 check("the agreement is reported at group level", list(stated), ["5VZ8873"])
 check("with the name the agent printed", stated["5VZ8873"].name, "Carlyle Buyout Umbrella")
-check("and the whole agreement's loan amount", stated["5VZ8873"].loan_amount, "1500000000")
+check("and both of the whole agreement's amounts",
+      (stated["5VZ8873"].facility_size, stated["5VZ8873"].ubs_participation),
+      ("1500000000", "420000000"))
 
 groups = assign_umbrellas(rows, stated)
 check("the funds group on the shared account", len(groups), 1)
@@ -238,8 +244,9 @@ check("under the name the report states, not one minted from the account number"
       groups[0].name, "Carlyle Buyout Umbrella")
 check("keyed on the account, so an analyst rename survives the next run",
       groups[0].key, "5VZ8873")
-check("the agreement's line rides on the group, not on its members",
-      (groups[0].loan_amount, groups[0].agent_bank), ("1500000000", "Wells Fargo"))
+check("the agreement's amounts ride on the group, not on its members",
+      (groups[0].facility_size, groups[0].ubs_participation, groups[0].agent_bank),
+      ("1500000000", "420000000", "Wells Fargo"))
 check("all six funds are members", sorted(groups[0].members), sorted(CARLYLE))
 check("a shared borrowing base is still not inferred", groups[0].cross_collateralized, False)
 
@@ -247,13 +254,13 @@ check("a shared borrowing base is still not inferred", groups[0].cross_collatera
 # facility differently, and the positional pass is what resolves it. Promoting that row to a group
 # would leave a credit agreement with a single member and the fund itself unreported.
 fac_data, by_acct = report([report_row("Ashford Bank", "Northwind Cap Ptrs IV", "5VZ9001",
-                                       loan="400000000")])
+                                       size="400000000", ubs="140000000")])
 rows, name_by_key, stated = upsert_facilities(
     fac_data, by_acct, [export_row("5VZ9001", "Northwind Capital Partners IV")])
 check("a single fund still claims the row positionally", stated, {})
-check("and keeps the report's spelling, loan amount and standing",
-      [rows[0][NAME], rows[0][LOAN], rows[0][STATUS]],
-      ["Northwind Cap Ptrs IV", "400000000", "Active"])
+check("and keeps the report's spelling, both amounts and standing",
+      [rows[0][NAME], rows[0][SIZE], rows[0][UBS_PART], rows[0][STATUS]],
+      ["Northwind Cap Ptrs IV", "400000000", "140000000", "Active"])
 
 # The report prints every member fund and no agreement above them. Each row name-matches its own
 # fund, so nothing is left over, no group row is stated - and nothing is grouped. Two facilities
@@ -342,7 +349,7 @@ check("but the group claims neither reference", groups[0].agreement_ref, "")
 # A reference printed over a GROUP row is the agreement's own, so every member inherits it and the
 # group carries it - while still resolving by the account, which is what the ingest keys on.
 fac_data, by_acct = report([report_row("Wells Fargo", "Carlyle Buyout Umbrella", "5VZ8873",
-                                       loan="1500000000")])
+                                       size="1500000000")])
 fac_data[0][AGREEMENT_REF] = "CA-2021-4471"
 rows, name_by_key, stated = upsert_facilities(
     fac_data, by_acct, [export_row("5VZ8873", f) for f in CARLYLE])
@@ -359,29 +366,30 @@ check("with the reference recorded on the group", groups[0].agreement_ref, "CA-2
 # ── the agreement's own terms ─────────────────────────────────────────────────
 #
 # The group is what the platform governs a member fund from: while it is Active it hands down its
-# account number, line, maturity, collateral date and standing, and the member's own terms stand
-# aside. A group fed without those arrives Not Stated and governs nothing, so the extract carries
-# them - but only ever from what a file states. Nothing below is inferred, summed or split.
+# account number, both amounts, maturity, collateral date and standing, and the member's own
+# terms stand aside. A group fed without those arrives Not Stated and governs nothing, so the extract
+# carries them - but only ever from what a file states. Nothing below is inferred, summed or split.
 
-def terms(g) -> tuple[str, str, str, str, str]:
-    """(account, line, maturity, collateral date, standing) - what the group feed states."""
-    return (g.account_number, g.loan_amount, g.maturity_date, g.collateral_date, g.facility_status)
+def terms(g) -> tuple[str, str, str, str, str, str]:
+    """(account, syndicated line, UBS slice, maturity, collateral date, standing) - the group feed."""
+    return (g.account_number, g.facility_size, g.ubs_participation, g.maturity_date,
+            g.collateral_date, g.facility_status)
 
 
 fac_data, by_acct = report([report_row("Wells Fargo", "Carlyle Buyout Umbrella", "5VZ8873",
-                                       loan="1500000000", maturity="2029-03-31")])
+                                       size="1500000000", maturity="2029-03-31")])
 rows, _, stated = upsert_facilities(
     fac_data, by_acct, [export_row("5VZ8873", f) for f in CARLYLE])
 groups = assign_umbrellas(rows, stated)
 check("a printed group row feeds the agreement's terms, not an empty shell",
       terms(groups[0]),
-      ("5VZ8873", "1500000000", "2029-03-31", "2026-06-25", "Active"))
+      ("5VZ8873", "1500000000", "", "2029-03-31", "2026-06-25", "Active"))
 
 # The collateral date is the one term the members are not expected to agree on: each is certified
 # against its own roster, on its own date. The agreement stands as of the last of them - an earlier
 # date would put the group behind evidence it already holds.
 fac_data, by_acct = report([report_row("Wells Fargo", "Carlyle Buyout Umbrella", "5VZ8873",
-                                       loan="1500000000", maturity="2029-03-31")])
+                                       size="1500000000", maturity="2029-03-31")])
 rows, _, stated = upsert_facilities(fac_data, by_acct, [
     export_row("5VZ8873", "Carlyle VII", bbdate="2026-03-31"),
     export_row("5VZ8873", "Carlyle VIII", bbdate="2026-06-25"),
@@ -394,7 +402,7 @@ check("the group is collateralized as of its members' latest date",
 # An agreement the agent does not call Active is fed as the agent stated it. Governing its members
 # off a standing the report contradicts would hand down terms the bank says are not in force.
 fac_data, by_acct = report([report_row("Wells Fargo", "Carlyle Buyout Umbrella", "5VZ8873",
-                                       loan="1500000000", status="Matured")])
+                                       size="1500000000", status="Matured")])
 rows, _, stated = upsert_facilities(
     fac_data, by_acct, [export_row("5VZ8873", f) for f in CARLYLE])
 groups = assign_umbrellas(rows, stated)
@@ -407,10 +415,10 @@ check("the agent's own standing wins over the default", groups[0].facility_statu
 # come off that row whatever the members carry; the collateral date is the members' latest, because
 # it is the one term each is certified on separately.
 
-def member(name: str, account: str, loan: str = "", maturity: str = "",
+def member(name: str, account: str, size: str = "", maturity: str = "",
            collateral: str = "") -> list[str]:
     row = facility(name, account)
-    row[LOAN], row[MATURITY], row[COLLATERAL] = loan, maturity, collateral
+    row[SIZE], row[MATURITY], row[COLLATERAL] = size, maturity, collateral
     return row
 
 
@@ -419,11 +427,11 @@ rows = [member("Atlas Growth Fund IV", "5VZ8873", "750000000", "2030-06-30", "20
 check("members agreeing on a figure still do not make an umbrella between them",
       assign_umbrellas(rows), [])
 
-groups = assign_umbrellas(rows, printed_over("5VZ8873", "Atlas Growth Umbrella",
-                                             loan="1500000000", maturity="2029-03-31"))
-check("the printed row states the agreement's line and maturity, not the members' figures",
+groups = assign_umbrellas(rows, printed_over("5VZ8873", "Atlas Growth Umbrella", size="1500000000",
+                                             maturity="2029-03-31", ubs="480000000"))
+check("the printed row states the agreement's amounts and maturity, not the members' figures",
       terms(groups[0]),
-      ("5VZ8873", "1500000000", "2029-03-31", "2026-06-25", "Active"))
+      ("5VZ8873", "1500000000", "480000000", "2029-03-31", "2026-06-25", "Active"))
 
 # Different figures on one account are the funds' own allocations. Summing them would state a line no
 # file does, and picking one would govern every sibling off a number printed for one fund - so the
@@ -433,7 +441,7 @@ rows = [member("Sablecreek Fund IX", "5VZ8873", "400000000", "2030-06-30"),
         member("Sablecreek Fund X", "5VZ8873", "250000000", "2031-12-31")]
 groups = assign_umbrellas(rows, printed_over("5VZ8873"))
 check("members' own lines are never summed into the agreement's, nor picked between",
-      (groups[0].loan_amount, groups[0].maturity_date), ("", ""))
+      (groups[0].facility_size, groups[0].maturity_date), ("", ""))
 check("and the group is still Active, which is what makes it govern at all",
       groups[0].facility_status, "Active")
 
@@ -442,7 +450,7 @@ check("and the group is still Active, which is what makes it govern at all",
 rows = [member("Orphan Group Fund I", "5VZ9100"), member("Orphan Group Fund II", "5VZ9100")]
 groups = assign_umbrellas(rows, printed_over("5VZ9100", "Orphan Group Umbrella"))
 check("a group stating no terms at all is still Active",
-      terms(groups[0]), ("5VZ9100", "", "", "", "Active"))
+      terms(groups[0]), ("5VZ9100", "", "", "", "", "Active"))
 
 # ── the feed's own shape ──────────────────────────────────────────────────────
 #
@@ -451,8 +459,9 @@ check("a group stating no terms at all is still Active",
 # a ragged row is read one column out of step the whole way across.
 check("the terms are appended to the group feed, never inserted",
       UMBRELLA_COLS,
-      ["key", "name", "agent_bank", "account_number", "loan_amount", "cross_collateralized",
-       "agreement_ref", "maturity_date", "collateral_date", "facility_status"])
+      ["key", "name", "agent_bank", "account_number", "facility_size", "cross_collateralized",
+       "agreement_ref", "maturity_date", "collateral_date", "facility_status",
+       "ubs_participation"])
 
 with tempfile.TemporaryDirectory() as tmp:
     path = Path(tmp) / "umbrellas.csv"
@@ -462,7 +471,7 @@ with tempfile.TemporaryDirectory() as tmp:
 check("the file's header is the contract", written[0], UMBRELLA_COLS)
 check("and every group writes one cell per column, in that order",
       written[1], ["5VZ9100", "Orphan Group Umbrella", "Ashford Bank", "5VZ9100", "", "", "", "",
-                   "", "Active"])
+                   "", "Active", ""])
 
 # ── report ────────────────────────────────────────────────────────────────────
 

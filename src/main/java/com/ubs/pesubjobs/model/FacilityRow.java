@@ -4,7 +4,7 @@ public record FacilityRow(
         String agentBank,
         String name,
         String accountNumber,
-        String loanAmount,
+        String facilitySize,
         String maturityDate,
         // The report's own FacilityStatus, as printed. Active/Inactive by the time it reaches here.
         String status,

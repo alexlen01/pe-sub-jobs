@@ -255,8 +255,15 @@ SEED_COLS = [
 # They are NOT fed. Which sleeve is which is not a fact the platform holds, and a sleeve set is
 # related in the platform by a person, so stating it on the feed would put a column in the contract
 # that nothing on the far side reads.
+#
+# facility_size and ubs_participation are the report's TWO amounts and are two different facts:
+# facility_size is the whole syndicated line, which is what the borrowing base is certified against
+# and what every LP position on the facility is apportioned from, and ubs_participation is the slice
+# of that line UBS holds, which is what the bank is exposed for. The column now called facility_size
+# was called loan_amount and was fed the UBS slice under that name, so the platform read the bank's
+# exposure as the facility's size; both are stated now, each under its own name.
 FACILITY_WORK_COLS = [
-    "agent_bank", "name", "account_number", "loan_amount", "maturity_date", "status",
+    "agent_bank", "name", "account_number", "facility_size", "maturity_date", "status",
     # The date the agent last restated that status. Written to hold the column's position: the
     # platform records a facility's standing, not when it was last restated, and dropping the column
     # would shift every column after it in feeds already in production.
@@ -280,6 +287,7 @@ FACILITY_WORK_COLS = [
 TRANCHE_TYPE_COL = FACILITY_WORK_COLS.index("tranche_type")
 TRANCHE_OF_COL = FACILITY_WORK_COLS.index("tranche_of")
 AGREEMENT_REF_COL = FACILITY_WORK_COLS.index("agreement_ref")
+UBS_PARTICIPATION_COL = FACILITY_WORK_COLS.index("ubs_participation")
 # The one group-level term read off the members rather than the printed group row: each member is
 # certified on its own date, and the agreement stands as of the last of them.
 COLLATERAL_COL = FACILITY_WORK_COLS.index("collateral_date")
@@ -297,7 +305,7 @@ FACILITY_EMIT_IDX = [FACILITY_WORK_COLS.index(c) for c in FACILITY_COLS]
 # down its account number, line, maturity, collateral date and standing - so a group fed without them
 # lands as Not Stated and governs nothing until somebody types the terms the file already carried.
 UMBRELLA_COLS = [
-    "key", "name", "agent_bank", "account_number", "loan_amount",
+    "key", "name", "agent_bank", "account_number", "facility_size",
     "cross_collateralized",
     # agreement_ref is what the platform resolves the group by where it is stated, so a group
     # survives its account being re-papered. Blank means the file stated nothing, which the ingest
@@ -319,6 +327,14 @@ UMBRELLA_COLS = [
     # a group exists here only because several funds draw on one account with live LP rosters
     # beneath it, and that is a live credit agreement. See group_status for the one exception.
     "facility_status",
+    # ADDITIVE, and appended here rather than beside facility_size for that reason alone - the two
+    # belong together and a reader positioned on the older header matters more.
+    #
+    # UBS's slice of the agreement's syndicated line, which the report now states beside it. An Active
+    # group hands BOTH amounts down to its members, each divided by the member's allocated share, so a
+    # group fed the line without the slice would govern its members' size and leave their UBS exposure
+    # to be typed by hand against a figure the file already carried.
+    "ubs_participation",
 ]
 
 # An umbrella subscription facility is TWO statements, one from each file, and BOTH are required:
@@ -334,7 +350,7 @@ UMBRELLA_COLS = [
 # agreement the bank never reported: it has no name but the account number, no line and no standing
 # of its own, and the platform would then govern those funds' loan terms from a row no file states.
 #
-# The group row is not a facility at all - it carries no LP roster, and its loan amount is the whole
+# The group row is not a facility at all - it carries no LP roster, and its amounts are the whole
 # agreement's rather than any one fund's - which is why it is never handed to a member (see
 # upsert_facilities): doing so puts the group's name and line onto one arbitrary fund and leaves its
 # siblings orphaned.
@@ -411,13 +427,21 @@ def legacy_sleeve_reading(name: str) -> "tuple[str, str] | None":
     return (tranche_type(m.group(1)), base) if base else None
 
 
-# Agent Bank Summary column layout (must match the report header exactly). Index 4 is an unnamed
-# spacer holding the report's subtotal amounts.
+# Agent Bank Summary column layout (must match the report header exactly).
+#
+# The report states TWO amounts per facility and they are different facts. "Syndicated Facility" is
+# the whole line the syndicate lends - what the borrowing base is certified against, and what every LP
+# position on the facility is apportioned from. "UBS Loan Amount" is the slice of that line UBS holds,
+# which is what the bank is exposed for. The report printed the UBS slice alone under the header
+# "LoanAmount" and this script read it as the facility's size; it is not, and both are read now.
+#
+# Index 5 is an unnamed spacer holding the report's subtotal amounts, one column right of the UBS
+# amount they total.
 ABS_COLS = [
-    "Agent", "Borrower", "AccountNumber", "LoanAmount", "", "MaturityDate",
-    "FacilityStatus", "FacilityStatusDate",
+    "Agent", "Borrower", "AccountNumber", "Syndicated Facility", "UBS Loan Amount", "",
+    "MaturityDate", "FacilityStatus", "FacilityStatusDate",
 ]
-# Columns the report may carry AFTER the eight above, located by header rather than by position so
+# Columns the report may carry AFTER the nine above, located by header rather than by position so
 # they may arrive in either order or not at all. The Agent Bank Summary is the facility-level file,
 # which makes it the natural place for an agent to state which sleeve of a facility a row is - and
 # it is the only file that carries a facility the export has no LPs for. Absent on every report
@@ -432,6 +456,10 @@ ABS_OPTIONAL_HEADERS = {
                   "Credit Agreement", "Facility Group"],
 }
 ABS_TOTAL_MARKER = "accesstotalsloanamount"  # _norm() prefix of the subtotal / grand-total rows
+# Where that marker is printed. The bands label themselves in the UBS Loan Amount column and put the
+# amount in the spacer beside it, which is one column right of where they used to sit - the bands
+# followed the amount they total rather than staying put when the syndicated line took a column.
+ABS_TOTAL_LABEL_COL = ABS_COLS.index("UBS Loan Amount")
 # _norm() of the FacilityStatus that onboards a reported facility as Active on the report's word
 # alone, with no export match behind it. Every other spelling reads as not-Active.
 ABS_ACTIVE_STATUS = "active"
@@ -924,14 +952,19 @@ def read_agent_bank_summary(path: Path) -> tuple[list[list[str]], dict[str, int]
     Borrower names are carried exactly as printed - two accounts may share one, and separating
     them is upsert_facilities' final pass, which sees the placeholder facilities too.
 
-    ubs_participation and collateral_date are not in the report — collateral_date is filled from
-    the export's BBDate by upsert_facilities. bank_status is the report's own FacilityStatus,
-    carried as printed; upsert_facilities normalises it and decides the final value."""
+    Both of the report's amounts are read: the Syndicated Facility onto facility_size and the UBS Loan
+    Amount onto ubs_participation. The latter used to be left blank here for an analyst to type, which
+    is why the platform held the bank's exposure only where somebody had entered it by hand; the
+    agent's report states it, so the feed carries it.
+
+    collateral_date is not in the report and is filled from the export's BBDate by upsert_facilities.
+    bank_status is the report's own FacilityStatus, carried as printed; upsert_facilities normalises
+    it and decides the final value."""
     if not path.is_file():
         raise SystemExit(
             f"Agent Bank Summary report not found: {path}\n"
-            "It is the source of every facility's agent bank, loan amount, maturity date and "
-            "agent-reported status. Drop it in pe-sub-jobs/data/import/, or edit the "
+            "It is the source of every facility's agent bank, syndicated line, UBS loan amount, "
+            "maturity date and agent-reported status. Drop it in pe-sub-jobs/data/import/, or edit the "
             "AGENT_BANK_SUMMARY_FILE variable near the top of this script, then re-run."
         )
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
@@ -943,7 +976,7 @@ def read_agent_bank_summary(path: Path) -> tuple[list[list[str]], dict[str, int]
             f"Agent Bank Summary header in '{ws.title}' does not match the expected schema.\n"
             f"  expected: {ABS_COLS}\n  found:    {header}"
         )
-    # Anything past the eight fixed columns is optional and located by header. An unrecognised
+    # Anything past the nine fixed columns is optional and located by header. An unrecognised
     # trailing column is ignored, exactly as in the export reader, so the report gaining a column
     # this script does not know about is never an error.
     abs_header_to_col = {_norm(alias): col
@@ -966,7 +999,7 @@ def read_agent_bank_summary(path: Path) -> tuple[list[list[str]], dict[str, int]
         text = [as_is(c) for c in cells]
         if not any(text):
             continue
-        if _norm(text[3]).startswith(ABS_TOTAL_MARKER):   # subtotal / grand-total band
+        if _norm(text[ABS_TOTAL_LABEL_COL]).startswith(ABS_TOTAL_MARKER):  # subtotal / grand total
             continue
         if text[0] and not text[1]:                       # agent group header -> carry down
             agent = text[0]
@@ -980,9 +1013,9 @@ def read_agent_bank_summary(path: Path) -> tuple[list[list[str]], dict[str, int]
         printed = _norm(name)                             # for the FndName join below
         # The row's own Agent cell wins if the report fills it; otherwise the carried-down header.
         # "Unknown" satisfies FacilityRowProcessor's non-blank agent_bank rule.
-        # The trailing blanks are ubs_participation, collateral_date, and the three umbrella
-        # columns - none of which the report states. collateral_date is filled in by
-        # upsert_facilities and the umbrella columns by assign_umbrellas.
+        # The trailing blanks are collateral_date and the three umbrella columns - none of which the
+        # report states. collateral_date is filled in by upsert_facilities and the umbrella columns
+        # by assign_umbrellas.
         #
         # The last two are the tranche declaration, taken from the report where it states one. A
         # report that does not is left blank here and resolved later, from the export or from the
@@ -990,8 +1023,8 @@ def read_agent_bank_summary(path: Path) -> tuple[list[list[str]], dict[str, int]
         def _opt(col: str) -> str:
             i = abs_optional_at.get(col)
             return as_is(full[i]).strip() if i is not None else ""
-        data.append([text[0] or agent or "Unknown", name, acct, text[3], iso_date(cells[5]),
-                     text[6], iso_date(cells[7]), "", "", "", "", "",
+        data.append([text[0] or agent or "Unknown", name, acct, text[3], iso_date(cells[6]),
+                     text[7], iso_date(cells[8]), text[4], "", "", "", "",
                      tranche_type(_opt("Tranche")), _opt("TrancheOf"), _opt("AgreementRef")])
         # Every borrower on the account, in report order: an account listed against two borrowers
         # is two facilities and both stay eligible for the LP join.
@@ -1228,17 +1261,20 @@ class StatedGroup:
 
     One row on an account the export carries several funds on, naming none of them: the agent has
     printed the obligor that signs and draws, and the funds beneath it only in the export. The row's
-    terms are the agreement's - the loan amount is the whole facility's, the status and maturity are
+    terms are the agreement's - both amounts are the whole facility's, the status and maturity are
     the group's - so they are fed at group level and never onto a member."""
     account: str
     name: str                # the printed Borrower: the credit agreement's own name
     agent_bank: str
-    loan_amount: str
+    facility_size: str       # the syndicated line the agreement states
     maturity_date: str
     bank_status: str         # as printed; normalised by the caller
     bank_status_date: str
+    # UBS's slice of that line, as the report prints it beside the syndicated one. The agreement's,
+    # like the size: a member takes its allocated share of both, never the whole of either.
+    ubs_participation: str = ""
     # The agreement's own reference, where the report printed it over the group row. Blank on a
-    # report that printed only the eight standard columns, which is every report to date - and
+    # report that printed only the nine standard columns, which is every report to date - and
     # blank is what the ingest reads as "not stated".
     agreement_ref: str = ""
 
@@ -1263,9 +1299,9 @@ def upsert_facilities(fac_data: list[list[str]], by_acct: dict[str, list[tuple[i
       0. an account the export carries SEVERAL funds on, whose single report row names none of them,
          is an umbrella printed at group level: that row is the credit agreement, not a facility. It
          is taken out of the join as a StatedGroup, its members are all built from the export, and
-         each inherits the group's agent bank, status and maturity - but not its loan amount, which
-         is the whole agreement's. Handing that row to a member instead would give one arbitrary
-         fund the group's name and the group's loan amount, and orphan the other five;
+         each inherits the group's agent bank, status and maturity - but neither of its amounts, which
+         are the whole agreement's. Handing that row to a member instead would give one arbitrary
+         fund the group's name and the group's whole line, and orphan the other five;
       1. a report row whose Borrower is the export's FndName owns that facility, which is what
          gives each fund on a shared account its own report row, on a report that prints them;
       2. whatever is left over is handed out in report order, so a facility the two files name
@@ -1344,6 +1380,7 @@ def upsert_facilities(fac_data: list[list[str]], by_acct: dict[str, list[tuple[i
             # fund is never read as the whole agreement's.
             groups[acct] = StatedGroup(acct, cells[1], cells[0], cells[3], cells[4],
                                        cells[5], cells[6],
+                                       ubs_participation=cells[UBS_PARTICIPATION_COL],
                                        agreement_ref=cells[AGREEMENT_REF_COL].strip())
             group_rows.add(idx)
         for key in keys:                            # pass 1 - exact FndName == Borrower
@@ -1390,11 +1427,13 @@ def upsert_facilities(fac_data: list[list[str]], by_acct: dict[str, list[tuple[i
         name = fnd_by_key[key] or (f"Unknown Facility {acctno}" if acctno
                                    else "Unknown Facility (no account)")
         # A member of a stated group is not an orphan: the report does carry it, at the level the
-        # agent reports the agreement on. It takes the group's agent bank and maturity, and NOT its
-        # loan amount - that figure is what the agreement lends, not what this fund borrows, and
-        # stamping it on each member would state the same money once per fund. Active for the same
-        # reason a claimed row is: the export carries a live LP roster against it. The agreement's
-        # own printed standing is fed at group level, where the agent stated it.
+        # agent reports the agreement on. It takes the group's agent bank and maturity, and NEITHER of
+        # its amounts - the syndicated line and UBS's slice of it are what the agreement lends and is
+        # lent under, not what this fund borrows, and stamping either on each member would state the
+        # same money once per fund. What a member does hold of them is its allocated share, which the
+        # platform divides out of the group. Active for the same reason a claimed row is: the export
+        # carries a live LP roster against it. The agreement's own printed standing is fed at group
+        # level, where the agent stated it.
         group = groups.get(acctno)
         if group is not None:
             # The agreement reference is carried down to a member the report never printed a row
@@ -1481,7 +1520,8 @@ class UmbrellaGroup:
     # What the report states about the AGREEMENT, read off the row it printed over the group.
     agent_bank: str = ""
     account_number: str = ""
-    loan_amount: str = ""
+    facility_size: str = ""     # the syndicated line
+    ubs_participation: str = ""  # UBS's slice of it
     # The agreement's own reference, where the report printed it over the group row. It is what the
     # platform resolves this group by where it is stated - the key above is then the account, or the
     # sleeves' shared base name, and is only a fallback.
@@ -1527,7 +1567,7 @@ def assign_umbrellas(rows: list[list[str]],
     several facilities happen to hold in common, and pooling every accountless facility into one
     umbrella would invent a credit agreement out of missing data.
 
-    The agreement's TERMS go out with it - account number, line, maturity, collateral date and
+    The agreement's TERMS go out with it - account number, both amounts, maturity, collateral date and
     standing - because the platform governs a member fund from its group, and a group fed without
     them arrives Not Stated and governs nothing. They are read off the printed group row, except the
     collateral date, which is the latest of the members': each is certified against its own roster on
@@ -1605,9 +1645,11 @@ def assign_umbrellas(rows: list[list[str]],
             acct, name, [rows[i][1] for i in idxs], False,
             agent_bank=printed.agent_bank,
             account_number=acct,
-            # The whole agreement's line, which is a group-level figure: it is stated once, over
-            # every member fund, and no member borrows it alone.
-            loan_amount=printed.loan_amount,
+            # The whole agreement's syndicated line and UBS's slice of it, both group-level figures:
+            # each is stated once, over every member fund, and no member borrows or is lent the whole
+            # of either alone.
+            facility_size=printed.facility_size,
+            ubs_participation=printed.ubs_participation,
             # The reference the group's members agree on where the printed row states none, carried
             # so the platform holds what the agent stated about the agreement. The group still
             # resolves by its account number: the reference is evidence for a person, not a key.
@@ -1651,9 +1693,9 @@ def write_umbrellas(path: Path, groups: list[UmbrellaGroup]) -> None:
         w.writerow(UMBRELLA_COLS)
         for g in groups:
             w.writerow([g.key, g.name, g.agent_bank, g.account_number,
-                        g.loan_amount, "true" if g.cross_collateralized else "",
+                        g.facility_size, "true" if g.cross_collateralized else "",
                         g.agreement_ref, g.maturity_date, g.collateral_date,
-                        g.facility_status])
+                        g.facility_status, g.ubs_participation])
 
 
 def main() -> int:

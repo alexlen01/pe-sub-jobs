@@ -97,7 +97,7 @@ class IngestTallyTest extends IntegrationTestBase {
 
     private JobExecution runFeed(int rows) throws Exception {
         StringBuilder csv = new StringBuilder(
-                "\"agent_bank\",\"name\",\"account_number\",\"loan_amount\",\"maturity_date\","
+                "\"agent_bank\",\"name\",\"account_number\",\"facility_size\",\"maturity_date\","
                 + "\"status\",\"status_date\",\"ubs_participation\",\"collateral_date\"\n");
         for (int i = 1; i <= rows; i++) {
             csv.append("\"Bank of America\",\"Facility %d\",\"ACC%d\",\"1000\",\"2026-01-01\",\"Active\",\"2026-01-01\",\"1\",\"2026-01-01\"\n"

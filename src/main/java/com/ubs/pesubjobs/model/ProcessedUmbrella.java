@@ -4,9 +4,10 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 
 /**
- * One umbrella feed row as the API takes it. Mirrors pe-sub-api's umbrella ingest payload: the
- * agreement's line is the group's {@code facilitySize}, since it is stated once over every member
- * fund and no member borrows it alone.
+ * One umbrella feed row as the API takes it. Mirrors pe-sub-api's umbrella ingest payload: the whole
+ * syndicated line is the group's {@code facilitySize} and UBS's slice of it the group's
+ * {@code ubsParticipation}, since both are stated once over every member fund and no member borrows
+ * either alone.
  */
 public record ProcessedUmbrella(
         String key,
@@ -27,5 +28,8 @@ public record ProcessedUmbrella(
         // One of Pending, Active or Inactive as the feed states it — never "Not Stated", which is
         // what a group nothing has been said about already reads as. The API takes this on create
         // and to fill a blank, and never over a standing an analyst set.
-        String facilityStatus
+        String facilityStatus,
+        // UBS's slice of the agreement's line, refreshed each run alongside the size. Last in the
+        // record to match the feed, which appends columns rather than inserting them.
+        BigDecimal ubsParticipation
 ) {}

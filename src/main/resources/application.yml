@@ -10,17 +10,22 @@ management:
     web:
       base-path: /manage
       exposure:
-        include: health
+        include: health,info
   endpoint:
     health:
       probes:
         enabled: true
-      show-details: never
+      # Component breakdown (peSubApi reachability, ingestDirectories, diskSpace) alongside the
+      # overall status — none of these details are credentials or PII, just operational signal.
+      show-details: always
       group:
         liveness:
           include: livenessState
         readiness:
-          include: readinessState,peSubApi
+          include: readinessState,peSubApi,ingestDirectories
+  info:
+    java:
+      enabled: true
 
 # No datasource: pe-sub-jobs is DB-less. All feed writes go through pe-sub-api's SERVICE
 # endpoints (pe-sub-api owns the schema), and Spring Batch runs on an in-memory
@@ -65,7 +70,7 @@ ingest:
 
 bb-template-import:
   enabled: ${BB_TEMPLATE_IMPORT_ENABLED:true}
-  directory: ${BB_TEMPLATE_IMPORT_DIR:data/bb-templates}
+  directory: ${BB_TEMPLATE_IMPORT_DIR:data/import/AgentBBs/bb_templates}
   api-base-url: ${PE_SUB_API_URL}
   scan-interval: ${BB_TEMPLATE_SCAN_INTERVAL:30s}
   stable-age: ${BB_TEMPLATE_STABLE_AGE:2s}

@@ -28,6 +28,8 @@ public class JobsSecurityConfig {
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http, JobsSecurityProperties props) throws Exception {
         return http
+                // Safe because this stateless API authenticates only through a proxy-injected
+                // header; it neither creates sessions nor accepts cookie-based credentials.
                 .csrf(csrf -> csrf.disable())
                 .cors(cors -> cors.disable())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -44,6 +46,7 @@ public class JobsSecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/manage/health").permitAll()
                         .requestMatchers(HttpMethod.GET, "/manage/health/liveness").permitAll()
                         .requestMatchers(HttpMethod.GET, "/manage/health/readiness").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/manage/info").permitAll()
                         .requestMatchers("/jobs/**").hasRole(props.getRequiredRole())
                         .anyRequest().denyAll())
                 .build();

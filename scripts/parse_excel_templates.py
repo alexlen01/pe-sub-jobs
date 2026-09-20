@@ -109,7 +109,7 @@ BUNDLED_FALLBACK_FIELDS: dict[str, list[str]] = {
     "Institutional vs HNW": ["Institutional vs HNW", "HNW Flag", "Investor Segment"],
     "LP Category": ["LP Category", "Agent LP Classification", "LP Classification"],
     "Investment Grade Flag": ["Investment Grade Flag", "Investment Grade", "IG Flag"],
-    "S&P Rating": ["S&P", "S&P Rating"],
+    "S&P Rating": ["S&P", "S&P Rating", "Investor S&P"],
     "Moody's Rating": ["Moody's", "Moody's Rating", "Moodys"],
     "Fitch Rating": ["Fitch", "Fitch Rating"],
     "Capital Commitments": ["Capital Commitments", "Committed Capital", "Total Commitment"],

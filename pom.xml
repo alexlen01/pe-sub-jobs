@@ -90,6 +90,15 @@
       <plugin>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-maven-plugin</artifactId>
+        <!-- Writes META-INF/build-info.properties (name, version, build time) so
+             BuildInfoContributor can publish the deployed component version on /manage/info. -->
+        <executions>
+          <execution>
+            <goals>
+              <goal>build-info</goal>
+            </goals>
+          </execution>
+        </executions>
       </plugin>
 
       <!-- Resolve the mockito-core jar path into the ${org.mockito:mockito-core:jar} property so

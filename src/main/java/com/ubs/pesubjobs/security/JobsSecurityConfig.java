@@ -43,10 +43,10 @@ public class JobsSecurityConfig {
                         // Container error dispatch must render the ProblemDetail body rather than
                         // being re-evaluated as an unauthenticated request.
                         .requestMatchers("/error").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/manage/health").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/manage/health/liveness").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/manage/health/readiness").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/manage/info").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/actuator/health").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/actuator/health/liveness").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/actuator/health/readiness").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/actuator/info").permitAll()
                         .requestMatchers("/jobs/**").hasRole(props.getRequiredRole())
                         .anyRequest().denyAll())
                 .build();

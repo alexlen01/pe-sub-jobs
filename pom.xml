@@ -91,7 +91,7 @@
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-maven-plugin</artifactId>
         <!-- Writes META-INF/build-info.properties (name, version, build time) so
-             BuildInfoContributor can publish the deployed component version on /manage/info. -->
+             BuildInfoContributor can publish the deployed component version on /actuator/info. -->
         <executions>
           <execution>
             <goals>

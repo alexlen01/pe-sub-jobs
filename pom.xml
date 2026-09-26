@@ -39,6 +39,15 @@
       <artifactId>spring-boot-starter-actuator</artifactId>
     </dependency>
 
+    <!-- Generates spring-configuration-metadata.json for IngestProperties / BbTemplateImportProperties
+         so the IDE recognizes the "ingest" and "bb-template-import" prefixes instead of flagging
+         them as unknown properties. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-configuration-processor</artifactId>
+      <optional>true</optional>
+    </dependency>
+
     <!-- The /jobs trigger executes feeds that rewrite LP Master and facilities wholesale, so it
          is gated on the same gateway-asserted identity pe-sub-api uses, restricted to SERVICE. -->
     <dependency>

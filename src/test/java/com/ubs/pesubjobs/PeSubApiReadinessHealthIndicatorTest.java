@@ -13,7 +13,7 @@ import static org.mockito.Mockito.when;
 
 class PeSubApiReadinessHealthIndicatorTest {
 
-    private static final String API_BASE_URL = "http://pe-sub-api:3001/pe-sub-api";
+    private static final String API_BASE_URL = "http://pe-sub-api:9062/pe-sub-api";
 
     private final PeSubApiClient apiClient = mock(PeSubApiClient.class);
     private final IngestProperties ingestProperties = new IngestProperties(

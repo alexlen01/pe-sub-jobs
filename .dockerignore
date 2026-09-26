@@ -1,0 +1,8 @@
+target/
+logs/
+data/
+scripts/
+.git/
+.gitignore
+.env
+*.md

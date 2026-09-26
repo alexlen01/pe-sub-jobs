@@ -66,7 +66,7 @@ class JobStartupRunnerTest {
     private JobStartupRunner newRunner(String umbrellaFile) {
         IngestProperties props = new IngestProperties(
                 "facilities.csv", umbrellaFile, "lp-master.csv", "lp-facility-seeds.csv", null,
-                "http://localhost:3001", "data/out", 10,
+                "http://localhost:9062", "data/out", 10,
                 Duration.ofSeconds(1), Duration.ofMillis(250), true);
         return new JobStartupRunner(jobOperator, umbrellaIngestJob, facilityIngestJob,
                 lpMasterIngestJob, lpRecordsSeedJob, clsConcLimitIngestJob, props, apiClient);

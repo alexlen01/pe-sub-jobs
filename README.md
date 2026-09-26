@@ -6,7 +6,7 @@ Spring Batch service for loading data into the PE Sub API.
 
 - Java 21
 - Maven
-- pe-sub-api running at `http://localhost:3001/pe-sub-api`
+- pe-sub-api running at `http://localhost:9062/pe-sub-api`
 - Data files in `data/out/` or configured input directories
 
 ## Local startup
@@ -15,8 +15,8 @@ Spring Batch service for loading data into the PE Sub API.
 mvn spring-boot:run
 ```
 
-- Service URL: `http://localhost:3003/pe-sub-jobs`
-- Startup waits for `GET /api/ping` on the API (`http://localhost:3001/pe-sub-api/api/ping` locally).
+- Service URL: `http://localhost:9064/pe-sub-jobs`
+- Startup waits for `GET /api/ping` on the API (`http://localhost:9062/pe-sub-api/api/ping` locally).
 
 ## Security
 
@@ -86,9 +86,9 @@ Use `?file=<name>` on a job endpoint to load a file from `INGEST_IMPORT_ROOT`.
 
 ## Environment variables
 
-- `PORT` — default `3003`
+- `PORT` — default `9064`
 - `LOG_PATH` — log directory
-- `PE_SUB_API_URL` — API base URL, default `http://localhost:3001/pe-sub-api`. Must include
+- `PE_SUB_API_URL` — API base URL, default `http://localhost:9062/pe-sub-api`. Must include
   pe-sub-api's servlet context path — locally and remotely, calls without it are rejected.
 - `UMBRELLA_INGEST_FILE` — startup umbrella (group) input
 - `FACILITY_INGEST_FILE` — startup facility input

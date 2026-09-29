@@ -46,7 +46,7 @@ class AzureBbTemplateStoreTest {
 
         List<BbTemplateObject> result = store.list();
 
-        assertThat(result).extracting(BbTemplateObject::name).containsExactly("alpha.xlsx", "zeta.xlsx");
+        assertThat(result).extracting(object -> object.name()).containsExactly("alpha.xlsx", "zeta.xlsx");
         BbTemplateObject first = result.get(0);
         assertThat(first.identifier()).isEqualTo(PREFIX + "alpha.xlsx");
         assertThat(first.size()).isEqualTo(100L);

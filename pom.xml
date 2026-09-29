@@ -18,7 +18,22 @@
 
   <properties>
     <java.version>21</java.version>
+    <!-- Pins azure-storage-blob/azure-identity transitively via the BOM import below, so the two
+         stay on a mutually-tested set of versions without pinning each one here by hand. -->
+    <azure-sdk-bom.version>1.2.31</azure-sdk-bom.version>
   </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>com.azure</groupId>
+        <artifactId>azure-sdk-bom</artifactId>
+        <version>${azure-sdk-bom.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
 
   <dependencies>
 
@@ -27,6 +42,20 @@
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-batch</artifactId>
+    </dependency>
+
+    <!-- On AKS, feed CSVs and bb_templates workbooks are read from Azure Blob Storage instead of
+         local disk (see the com.ubs.pesubjobs.storage package). Auth is Azure AD Workload Identity
+         via DefaultAzureCredentialBuilder — no connection strings or account keys anywhere in
+         config. The `local` profile never constructs these clients; docker-compose keeps reading
+         local disk unmodified. -->
+    <dependency>
+      <groupId>com.azure</groupId>
+      <artifactId>azure-storage-blob</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.azure</groupId>
+      <artifactId>azure-identity</artifactId>
     </dependency>
 
     <dependency>

@@ -3,6 +3,7 @@ package com.ubs.pesubjobs;
 import com.ubs.pesubjobs.client.PeSubApiClient;
 import com.ubs.pesubjobs.config.IngestProperties;
 import com.ubs.pesubjobs.config.IngestTallyListener;
+import com.ubs.pesubjobs.storage.FeedFileStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.batch.core.job.Job;
@@ -16,8 +17,6 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.OptionalLong;
@@ -35,6 +34,7 @@ public class JobStartupRunner implements ApplicationRunner {
     private final Job clsConcLimitIngestJob;
     private final IngestProperties ingestProperties;
     private final PeSubApiClient apiClient;
+    private final FeedFileStore feedFileStore;
 
     public JobStartupRunner(JobOperator jobOperator,
                             @Qualifier("umbrellaIngestJob") Job umbrellaIngestJob,
@@ -43,7 +43,8 @@ public class JobStartupRunner implements ApplicationRunner {
                             @Qualifier("lpRecordsSeedJob") Job lpRecordsSeedJob,
                             @Qualifier("clsConcLimitIngestJob") Job clsConcLimitIngestJob,
                             IngestProperties ingestProperties,
-                            PeSubApiClient apiClient) {
+                            PeSubApiClient apiClient,
+                            FeedFileStore feedFileStore) {
         this.jobOperator = jobOperator;
         this.umbrellaIngestJob = umbrellaIngestJob;
         this.facilityIngestJob = facilityIngestJob;
@@ -52,6 +53,7 @@ public class JobStartupRunner implements ApplicationRunner {
         this.clsConcLimitIngestJob = clsConcLimitIngestJob;
         this.ingestProperties = ingestProperties;
         this.apiClient = apiClient;
+        this.feedFileStore = feedFileStore;
     }
 
     @Override
@@ -85,7 +87,7 @@ public class JobStartupRunner implements ApplicationRunner {
         String umbrellaFile = ingestProperties.umbrellaFile();
         if (umbrellaFile == null || umbrellaFile.isBlank()) {
             log.info("[umbrella-ingest] skipped - no feed file configured (ingest.umbrella-file)");
-        } else if (!Files.isReadable(Path.of(umbrellaFile))) {
+        } else if (!feedFileStore.exists(umbrellaFile)) {
             log.warn("[umbrella-ingest] skipped - no readable feed file at {}. Facility groups will be named from what the facility feed carries.",
                     umbrellaFile);
         } else {

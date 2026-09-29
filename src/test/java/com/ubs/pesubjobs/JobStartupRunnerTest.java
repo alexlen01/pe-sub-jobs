@@ -2,6 +2,8 @@ package com.ubs.pesubjobs;
 
 import com.ubs.pesubjobs.client.PeSubApiClient;
 import com.ubs.pesubjobs.config.IngestProperties;
+import com.ubs.pesubjobs.storage.FeedFileStore;
+import com.ubs.pesubjobs.storage.LocalFeedFileStore;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -68,8 +70,11 @@ class JobStartupRunnerTest {
                 "facilities.csv", umbrellaFile, "lp-master.csv", "lp-facility-seeds.csv", null,
                 "http://localhost:9062", "data/out", 10,
                 Duration.ofSeconds(1), Duration.ofMillis(250), true);
+        // exists() only stats the identifier itself, so it does not care that importRoot here is
+        // unrelated to where the umbrella feed file was actually written.
+        FeedFileStore feedFileStore = new LocalFeedFileStore(props);
         return new JobStartupRunner(jobOperator, umbrellaIngestJob, facilityIngestJob,
-                lpMasterIngestJob, lpRecordsSeedJob, clsConcLimitIngestJob, props, apiClient);
+                lpMasterIngestJob, lpRecordsSeedJob, clsConcLimitIngestJob, props, apiClient, feedFileStore);
     }
 
     private void counts(OptionalLong facilities, OptionalLong lpMaster, OptionalLong lpRecords) {

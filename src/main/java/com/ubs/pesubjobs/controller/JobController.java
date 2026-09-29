@@ -152,7 +152,7 @@ public class JobController {
      */
     private String resolveFeedPath(String jobName, String requestedFile) {
         if (requestedFile != null && !requestedFile.isBlank()) {
-            return importFileResolver.resolve(requestedFile).toString();
+            return importFileResolver.resolve(requestedFile);
         }
         String configured = switch (jobName) {
             case "umbrella-ingest"        -> ingestProperties.umbrellaFile();

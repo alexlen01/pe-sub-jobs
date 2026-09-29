@@ -1,6 +1,6 @@
 package com.ubs.pesubjobs.exception;
 
-import com.ubs.pesubjobs.config.ImportFileResolver.ImportFileNotAllowedException;
+import com.ubs.pesubjobs.storage.FeedFileNotAllowedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.batch.core.job.JobExecutionException;
@@ -20,8 +20,8 @@ public class GlobalExceptionHandler {
      * A rejected feed file name is caller error, not a server fault. The message names only what
      * the caller supplied — never the resolved path or the import root.
      */
-    @ExceptionHandler(ImportFileNotAllowedException.class)
-    public ProblemDetail handleImportFileNotAllowed(ImportFileNotAllowedException ex) {
+    @ExceptionHandler(FeedFileNotAllowedException.class)
+    public ProblemDetail handleImportFileNotAllowed(FeedFileNotAllowedException ex) {
         ProblemDetail pd = ProblemDetail.forStatus(HttpStatus.BAD_REQUEST);
         pd.setTitle("Feed File Not Accepted");
         pd.setDetail(ex.getMessage());

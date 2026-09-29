@@ -13,11 +13,11 @@ import org.springframework.batch.core.step.builder.StepBuilder;
 import org.springframework.batch.infrastructure.item.ItemWriter;
 import org.springframework.batch.infrastructure.item.file.FlatFileItemReader;
 import org.springframework.batch.infrastructure.item.file.builder.FlatFileItemReaderBuilder;
+import com.ubs.pesubjobs.storage.FeedFileStore;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.core.io.FileSystemResource;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import java.util.List;
@@ -56,10 +56,11 @@ public class FacilityIngestJobConfig {
     @Bean("facilityReader")
     @StepScope
     public FlatFileItemReader<FacilityRow> facilityReader(
-            @Value("#{jobParameters['filePath']}") String filePath) {
+            @Value("#{jobParameters['filePath']}") String filePath,
+            FeedFileStore feedFileStore) {
         return new FlatFileItemReaderBuilder<FacilityRow>()
                 .name("facilityReader")
-                .resource(new FileSystemResource(filePath))
+                .resource(feedFileStore.open(filePath))
                 .linesToSkip(1)
                 // The umbrella columns and then the agreement reference are last, and the tokenizer
                 // is lenient, so a feed written before either existed still loads: its rows simply

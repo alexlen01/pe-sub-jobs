@@ -2,6 +2,8 @@ package com.ubs.pesubjobs;
 
 import com.ubs.pesubjobs.config.BbTemplateImportProperties;
 import com.ubs.pesubjobs.security.JobsSecurityProperties;
+import com.ubs.pesubjobs.storage.BbTemplateStore;
+import com.ubs.pesubjobs.storage.LocalBbTemplateStore;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -48,7 +50,8 @@ class BbTemplateImportScanTest {
         // have to wait out the production settling window to exercise anything else.
         BbTemplateImportProperties props = new BbTemplateImportProperties(
                 true, dropDirectory.toString(), API, Duration.ofSeconds(30), Duration.ZERO);
-        importer = new BbTemplateDirectoryImporter(props, new JobsSecurityProperties(), builder);
+        BbTemplateStore store = new LocalBbTemplateStore(props);
+        importer = new BbTemplateDirectoryImporter(props, store, new JobsSecurityProperties(), builder);
     }
 
     @Test

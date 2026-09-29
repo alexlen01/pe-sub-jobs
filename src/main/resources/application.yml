@@ -72,6 +72,18 @@ bb-template-import:
   scan-interval: ${BB_TEMPLATE_SCAN_INTERVAL:30s}
   stable-age: ${BB_TEMPLATE_STABLE_AGE:2s}
 
+# Read only outside the `local` profile (AKS): feed CSVs and bb_templates workbooks come from Azure
+# Blob Storage instead of local disk. Auth is Azure AD Workload Identity (DefaultAzureCredentialBuilder
+# picks up the AKS workload-identity webhook's injected AZURE_CLIENT_ID / AZURE_TENANT_ID /
+# AZURE_FEDERATED_TOKEN_FILE) - no connection string or account key is ever configured here.
+azure:
+  storage:
+    account-url: ${AZURE_STORAGE_ACCOUNT_URL:}
+    feed-container: ${AZURE_STORAGE_FEED_CONTAINER:pe-sub-feeds}
+    feed-prefix: ${AZURE_STORAGE_FEED_PREFIX:}
+    bb-template-container: ${AZURE_STORAGE_BB_TEMPLATE_CONTAINER:pe-sub-bb-templates}
+    bb-template-prefix: ${AZURE_STORAGE_BB_TEMPLATE_PREFIX:}
+
 logging:
   file:
     path: ${LOG_PATH:../pe-sub/logs}

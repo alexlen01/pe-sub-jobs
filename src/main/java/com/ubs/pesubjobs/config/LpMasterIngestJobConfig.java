@@ -21,11 +21,11 @@ import org.springframework.batch.infrastructure.repeat.RepeatStatus;
 import org.springframework.batch.infrastructure.item.file.FlatFileItemReader;
 import org.springframework.batch.infrastructure.item.file.builder.FlatFileItemReaderBuilder;
 import org.springframework.batch.infrastructure.item.support.IteratorItemReader;
+import com.ubs.pesubjobs.storage.FeedFileStore;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.core.io.FileSystemResource;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import java.util.List;
@@ -137,10 +137,11 @@ public class LpMasterIngestJobConfig {
     @Bean("lpMasterReader")
     @StepScope
     public FlatFileItemReader<LpMasterRow> lpMasterReader(
-            @Value("#{jobParameters['filePath']}") String filePath) {
+            @Value("#{jobParameters['filePath']}") String filePath,
+            FeedFileStore feedFileStore) {
         return new FlatFileItemReaderBuilder<LpMasterRow>()
                 .name("lpMasterReader")
-                .resource(new FileSystemResource(filePath))
+                .resource(feedFileStore.open(filePath))
                 .linesToSkip(1)
                 .lineTokenizer(CsvLineTokenizers.lenientQuotedCsvTokenizer(
                         "investorName", "parent", "spv", "investorType",

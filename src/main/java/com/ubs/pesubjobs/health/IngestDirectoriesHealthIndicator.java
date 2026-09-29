@@ -1,46 +1,39 @@
 package com.ubs.pesubjobs.health;
 
-import com.ubs.pesubjobs.config.BbTemplateImportProperties;
-import com.ubs.pesubjobs.config.IngestProperties;
+import com.ubs.pesubjobs.storage.BbTemplateStore;
+import com.ubs.pesubjobs.storage.FeedFileStore;
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.stereotype.Component;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
-
 /**
- * Reports whether the directories the startup feeds and the BB-template watcher read from are
- * present and readable. Both are configured paths on the pod's own disk ({@code ingest.import-root}
- * and {@code bb-template-import.directory}) — a missing or unreadable one means a feed silently
- * finds nothing rather than failing loudly, which is exactly the case an operator needs surfaced.
+ * Reports whether the locations the startup feeds and the BB-template watcher read from are
+ * reachable — a local directory in the {@code local} profile ({@code ingest.import-root} and
+ * {@code bb-template-import.directory}), an Azure Blob Storage container/prefix everywhere else. A
+ * missing or unreachable one means a feed silently finds nothing rather than failing loudly, which
+ * is exactly the case an operator needs surfaced.
  */
 @Component("ingestDirectories")
 public class IngestDirectoriesHealthIndicator implements HealthIndicator {
 
-    private final Path importRoot;
-    private final Path bbTemplateDirectory;
+    private final FeedFileStore feedFileStore;
+    private final BbTemplateStore bbTemplateStore;
 
-    public IngestDirectoriesHealthIndicator(IngestProperties ingestProperties,
-                                             BbTemplateImportProperties bbTemplateImportProperties) {
-        this.importRoot = Path.of(ingestProperties.importRoot()).toAbsolutePath().normalize();
-        this.bbTemplateDirectory = Path.of(bbTemplateImportProperties.directory()).toAbsolutePath().normalize();
+    public IngestDirectoriesHealthIndicator(FeedFileStore feedFileStore, BbTemplateStore bbTemplateStore) {
+        this.feedFileStore = feedFileStore;
+        this.bbTemplateStore = bbTemplateStore;
     }
 
     @Override
     public Health health() {
-        boolean importRootReadable = isReadableDirectory(importRoot);
-        boolean bbTemplateDirReadable = isReadableDirectory(bbTemplateDirectory);
+        boolean importRootReadable = feedFileStore.isReachable();
+        boolean bbTemplateDirReadable = bbTemplateStore.isReachable();
 
         Health.Builder builder = (importRootReadable && bbTemplateDirReadable ? Health.up() : Health.down())
-            .withDetail("importRoot", importRoot.toString())
+            .withDetail("importRoot", feedFileStore.describeLocation())
             .withDetail("importRootReadable", importRootReadable)
-            .withDetail("bbTemplateDirectory", bbTemplateDirectory.toString())
+            .withDetail("bbTemplateDirectory", bbTemplateStore.describeLocation())
             .withDetail("bbTemplateDirectoryReadable", bbTemplateDirReadable);
         return builder.build();
-    }
-
-    private boolean isReadableDirectory(Path path) {
-        return Files.isDirectory(path) && Files.isReadable(path);
     }
 }

@@ -2,12 +2,13 @@ package com.ubs.pesubjobs;
 
 import com.ubs.pesubjobs.config.BbTemplateImportProperties;
 import com.ubs.pesubjobs.security.JobsSecurityProperties;
+import com.ubs.pesubjobs.storage.BbTemplateObject;
+import com.ubs.pesubjobs.storage.BbTemplateStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
-import org.springframework.core.io.FileSystemResource;
 import org.springframework.http.MediaType;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -17,15 +18,12 @@ import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.Instant;
-import java.util.Comparator;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.stream.Stream;
 
 @Component
 public class BbTemplateDirectoryImporter implements ApplicationRunner {
@@ -33,14 +31,19 @@ public class BbTemplateDirectoryImporter implements ApplicationRunner {
     private static final Logger log = LoggerFactory.getLogger(BbTemplateDirectoryImporter.class);
 
     private final BbTemplateImportProperties props;
+    private final BbTemplateStore store;
     private final RestClient restClient;
-    private final Map<Path, Fingerprint> imported = new ConcurrentHashMap<>();
+    // Keyed off blob/file identity rather than a filesystem Path — the same map shape works
+    // whether the active profile is reading a local directory or an Azure Blob Storage container.
+    // Single replica: no cross-pod locking needed for this in-memory dedupe.
+    private final Map<String, Fingerprint> imported = new ConcurrentHashMap<>();
     private final AtomicBoolean scanRunning = new AtomicBoolean(false);
 
     // Two constructors, so the injection point has to be named explicitly.
     @Autowired
-    public BbTemplateDirectoryImporter(BbTemplateImportProperties props, JobsSecurityProperties security) {
-        this(props, security, RestClient.builder());
+    public BbTemplateDirectoryImporter(BbTemplateImportProperties props, BbTemplateStore store,
+                                       JobsSecurityProperties security) {
+        this(props, store, security, RestClient.builder());
     }
 
     /**
@@ -48,9 +51,10 @@ public class BbTemplateDirectoryImporter implements ApplicationRunner {
      * what it does when the API refuses one — can be exercised against a stubbed transport instead
      * of only against a live API. Not the injection point: the constructor above is.
      */
-    BbTemplateDirectoryImporter(BbTemplateImportProperties props, JobsSecurityProperties security,
-                                RestClient.Builder restClientBuilder) {
+    BbTemplateDirectoryImporter(BbTemplateImportProperties props, BbTemplateStore store,
+                                JobsSecurityProperties security, RestClient.Builder restClientBuilder) {
         this.props = props;
+        this.store = store;
         // Template import is SERVICE-gated on pe-sub-api alongside the ANALYST screen path, so
         // this caller asserts only what it is. In gateway mode a header-less post is 401.
         this.restClient = restClientBuilder
@@ -76,41 +80,36 @@ public class BbTemplateDirectoryImporter implements ApplicationRunner {
             log.debug("BB template import scan skipped reason={} cause=scan-already-running", reason);
             return;
         }
-        Path dir = Path.of(props.directory()).toAbsolutePath().normalize();
         try {
-            Files.createDirectories(dir);
-        } catch (IOException e) {
-            log.warn("BB template import scan skipped reason={} directory={} error={}", reason, dir, e.getMessage(), e);
-            scanRunning.set(false);
-            return;
-        }
-        if (!apiAvailable(reason)) {
-            scanRunning.set(false);
-            return;
-        }
+            List<BbTemplateObject> objects;
+            try {
+                objects = store.list();
+            } catch (IOException e) {
+                log.warn("BB template import scan skipped reason={} location={} error={}",
+                        reason, store.describeLocation(), e.getMessage(), e);
+                return;
+            }
+            if (!apiAvailable(reason)) {
+                return;
+            }
 
-        try (Stream<Path> files = Files.list(dir)) {
-            files
-                .filter(Files::isRegularFile)
+            objects.stream()
                 .filter(this::isImportWorkbook)
-                .sorted(Comparator.comparing(path -> path.getFileName().toString()))
-                .takeWhile(path -> importIfChanged(path, reason))
-                .forEach(path -> {});
-        } catch (IOException e) {
-            log.warn("BB template import scan failed reason={} directory={} error={}", reason, dir, e.getMessage(), e);
+                .takeWhile(object -> importIfChanged(object, reason))
+                .forEach(object -> {});
         } finally {
             scanRunning.set(false);
         }
     }
 
-    private boolean importIfChanged(Path path, String reason) {
+    private boolean importIfChanged(BbTemplateObject object, String reason) {
         try {
-            Fingerprint fp = fingerprint(path);
+            Fingerprint fp = new Fingerprint(object.size(), object.lastModified().toEpochMilli());
             if (!isStable(fp)) return true;
-            if (fp.equals(imported.get(path))) return true;
+            if (fp.equals(imported.get(object.identifier()))) return true;
 
             MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
-            body.add("file", new FileSystemResource(path));
+            body.add("file", store.open(object.identifier()));
             restClient.post()
                 .uri("/api/bb-templates/import?mode=upsert")
                 .contentType(MediaType.MULTIPART_FORM_DATA)
@@ -118,15 +117,15 @@ public class BbTemplateDirectoryImporter implements ApplicationRunner {
                 .retrieve()
                 .toBodilessEntity();
 
-            imported.put(path, fp);
-            log.info("BB template imported reason={} file={}", reason, path);
+            imported.put(object.identifier(), fp);
+            log.info("BB template imported reason={} file={}", reason, object.name());
             return true;
         } catch (ResourceAccessException e) {
             log.warn("BB template import scan paused reason={} file={} apiBaseUrl={} error={}",
-                reason, path, trimTrailingSlash(props.apiBaseUrl()), e.getMessage());
+                reason, object.name(), trimTrailingSlash(props.apiBaseUrl()), e.getMessage());
             return false;
         } catch (Exception e) {
-            log.warn("BB template import failed reason={} file={} error={}", reason, path, e.getMessage(), e);
+            log.warn("BB template import failed reason={} file={} error={}", reason, object.name(), e.getMessage(), e);
             return true;
         }
     }
@@ -150,8 +149,8 @@ public class BbTemplateDirectoryImporter implements ApplicationRunner {
      * ".PARTIAL.XLSX" to a dotless "ı", the guard below stops matching, and a workbook still
      * being written gets posted to the API half-formed.
      */
-    private boolean isImportWorkbook(Path path) {
-        String name = path.getFileName().toString().toLowerCase(Locale.ROOT);
+    private boolean isImportWorkbook(BbTemplateObject object) {
+        String name = object.name().toLowerCase(Locale.ROOT);
         return name.endsWith(".xlsx")
             && !name.startsWith("~$")
             && !name.endsWith(".tmp.xlsx")
@@ -160,10 +159,6 @@ public class BbTemplateDirectoryImporter implements ApplicationRunner {
 
     private boolean isStable(Fingerprint fp) {
         return Instant.now().minus(props.stableAge()).toEpochMilli() >= fp.lastModifiedMillis();
-    }
-
-    private Fingerprint fingerprint(Path path) throws IOException {
-        return new Fingerprint(Files.size(path), Files.getLastModifiedTime(path).toMillis());
     }
 
     private static String trimTrailingSlash(String raw) {

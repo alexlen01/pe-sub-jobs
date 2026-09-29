@@ -10,11 +10,11 @@ import org.springframework.batch.core.step.builder.StepBuilder;
 import org.springframework.batch.infrastructure.item.ItemWriter;
 import org.springframework.batch.infrastructure.item.file.FlatFileItemReader;
 import org.springframework.batch.infrastructure.item.file.builder.FlatFileItemReaderBuilder;
+import com.ubs.pesubjobs.storage.FeedFileStore;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.core.io.FileSystemResource;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import java.util.List;
@@ -59,10 +59,11 @@ public class LpRecordsSeedJobConfig {
     @Bean("lpFacilitySeedReader")
     @org.springframework.batch.core.configuration.annotation.StepScope
     public FlatFileItemReader<LpFacilitySeedRow> lpFacilitySeedReader(
-            @Value("#{jobParameters['filePath']}") String filePath) {
+            @Value("#{jobParameters['filePath']}") String filePath,
+            FeedFileStore feedFileStore) {
         return new FlatFileItemReaderBuilder<LpFacilitySeedRow>()
                 .name("lpFacilitySeedReader")
-                .resource(new FileSystemResource(filePath))
+                .resource(feedFileStore.open(filePath))
                 .linesToSkip(1)
                 .lineTokenizer(CsvLineTokenizers.lenientQuotedCsvTokenizer(
                         "facilityName", "investorName", "capitalCommitment", "uncalledCapital",

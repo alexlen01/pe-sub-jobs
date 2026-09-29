@@ -13,11 +13,11 @@ import org.springframework.batch.core.step.builder.StepBuilder;
 import org.springframework.batch.infrastructure.item.ItemWriter;
 import org.springframework.batch.infrastructure.item.file.FlatFileItemReader;
 import org.springframework.batch.infrastructure.item.file.builder.FlatFileItemReaderBuilder;
+import com.ubs.pesubjobs.storage.FeedFileStore;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.core.io.FileSystemResource;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import java.util.List;
@@ -61,10 +61,11 @@ public class UmbrellaIngestJobConfig {
     @Bean("umbrellaReader")
     @StepScope
     public FlatFileItemReader<UmbrellaRow> umbrellaReader(
-            @Value("#{jobParameters['filePath']}") String filePath) {
+            @Value("#{jobParameters['filePath']}") String filePath,
+            FeedFileStore feedFileStore) {
         return new FlatFileItemReaderBuilder<UmbrellaRow>()
                 .name("umbrellaReader")
-                .resource(new FileSystemResource(filePath))
+                .resource(feedFileStore.open(filePath))
                 .linesToSkip(1)
                 // In the order the extract writes them. The agreement's terms are APPENDED, so a
                 // file written before they existed is short a few cells rather than misaligned; the

@@ -18,6 +18,7 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -90,7 +91,7 @@ public class AzureBbTemplateStore implements BbTemplateStore {
                         ? properties.getLastModified().toInstant() : Instant.EPOCH;
                 objects.add(new BbTemplateObject(blobName, AzureBlobNames.bareName(blobName), size, lastModified));
             }
-            objects.sort(Comparator.comparing(BbTemplateObject::name));
+            objects.sort(Comparator.comparing(o -> o.name()));
             return objects;
         } catch (Exception e) {
             // Broad on purpose: a bad account-url or credential-chain failure surfaces here (lazy

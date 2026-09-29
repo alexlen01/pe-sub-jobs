@@ -90,7 +90,7 @@ public class AzureBbTemplateStore implements BbTemplateStore {
                         ? properties.getLastModified().toInstant() : Instant.EPOCH;
                 objects.add(new BbTemplateObject(blobName, AzureBlobNames.bareName(blobName), size, lastModified));
             }
-            objects.sort((left, right) -> left.name().compareTo(right.name()));
+            objects.sort(Comparator.comparing(BbTemplateObject::name));
             return objects;
         } catch (Exception e) {
             // Broad on purpose: a bad account-url or credential-chain failure surfaces here (lazy

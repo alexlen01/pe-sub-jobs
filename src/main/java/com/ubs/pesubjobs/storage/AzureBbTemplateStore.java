@@ -18,8 +18,8 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Watches an Azure Blob Storage container for finished BB template workbooks — every profile
@@ -41,7 +41,7 @@ public class AzureBbTemplateStore implements BbTemplateStore {
     private final String accountUrl;
     private final String containerName;
     private final String prefix;
-    private volatile BlobContainerClient containerClient;
+    private final AtomicReference<BlobContainerClient> containerClient = new AtomicReference<>();
 
     @Autowired
     public AzureBbTemplateStore(AzureStorageProperties props) {
@@ -55,21 +55,21 @@ public class AzureBbTemplateStore implements BbTemplateStore {
         this.accountUrl = null;
         this.containerName = null;
         this.prefix = prefix;
-        this.containerClient = containerClient;
+        this.containerClient.set(containerClient);
     }
 
     private BlobContainerClient client() {
-        BlobContainerClient client = containerClient;
+        BlobContainerClient client = containerClient.get();
         if (client == null) {
             synchronized (this) {
-                client = containerClient;
+                client = containerClient.get();
                 if (client == null) {
                     BlobServiceClient serviceClient = new BlobServiceClientBuilder()
                             .endpoint(AzureBlobNames.requireAccountUrl(accountUrl))
                             .credential(new DefaultAzureCredentialBuilder().build())
                             .buildClient();
                     client = serviceClient.getBlobContainerClient(containerName);
-                    containerClient = client;
+                    containerClient.set(client);
                 }
             }
         }
@@ -90,7 +90,7 @@ public class AzureBbTemplateStore implements BbTemplateStore {
                         ? properties.getLastModified().toInstant() : Instant.EPOCH;
                 objects.add(new BbTemplateObject(blobName, AzureBlobNames.bareName(blobName), size, lastModified));
             }
-            objects.sort(Comparator.comparing(BbTemplateObject::name));
+            objects.sort((left, right) -> left.name().compareTo(right.name()));
             return objects;
         } catch (Exception e) {
             // Broad on purpose: a bad account-url or credential-chain failure surfaces here (lazy

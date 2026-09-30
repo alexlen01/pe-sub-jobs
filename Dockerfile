@@ -28,9 +28,8 @@ COPY --from=build /build/target/*.jar app.jar
 RUN mkdir -p /app/data && chown -R pesub:pesub /app
 USER pesub:pesub
 
-# The app's actual listen port comes from a profile-specific env var set at deploy time
-# (DEV_JOBS_PORT / QA_JOBS_PORT / PROD_JOBS_PORT in a cluster, PORT for a bare `docker run`) — see
-# application.yml. 8080 here only documents the image's expected default.
+# The app listens on PORT (application.yml; the Helm chart sets it from containerPort). 8080 here
+# only documents the image's expected default.
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \

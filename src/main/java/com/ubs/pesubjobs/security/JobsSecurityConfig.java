@@ -1,5 +1,6 @@
 package com.ubs.pesubjobs.security;
 
+import com.ubs.pesubjobs.config.InternalTlsProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -26,14 +27,17 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 public class JobsSecurityConfig {
 
     @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http, JobsSecurityProperties props) throws Exception {
+    public SecurityFilterChain filterChain(HttpSecurity http, JobsSecurityProperties props,
+                                           InternalTlsProperties internalTls) throws Exception {
         return http
                 // Safe because this stateless API authenticates only through a proxy-injected
                 // header; it neither creates sessions nor accepts cookie-based credentials.
                 .csrf(csrf -> csrf.disable())
                 .cors(cors -> cors.disable())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .addFilterBefore(new ServiceIdentityFilter(props), UsernamePasswordAuthenticationFilter.class)
+                // The required role is honoured only over mutual TLS once it is enabled.
+                .addFilterBefore(new ServiceIdentityFilter(props, internalTls.enabled()),
+                        UsernamePasswordAuthenticationFilter.class)
                 // Without an entry point an anonymous denial answers 403, which tells a caller its
                 // credentials were rejected rather than that it presented none. 401 is the honest
                 // answer for a missing identity header; an authenticated caller still gets 403.

@@ -10,7 +10,7 @@ class InternalTlsPropertiesTest {
     private static final String PASSWORD = "test-only-changeit";
 
     private static InternalTlsProperties tls(boolean enabled) {
-        return new InternalTlsProperties(enabled, 8443, "classpath:tls/service.p12", PASSWORD, "PKCS12",
+        return new InternalTlsProperties(enabled, "classpath:tls/service.p12", PASSWORD, "PKCS12",
                 "classpath:tls/truststore.p12", PASSWORD, "PKCS12");
     }
 
@@ -23,7 +23,7 @@ class InternalTlsPropertiesTest {
 
     @Test
     void enabledBuildsMutualTlsClientFromStores() {
-        assertThat(tls(true).restClientBuilder("ingest.api-base-url", "https://pe-sub-api:8443/pe-sub-api").build())
+        assertThat(tls(true).restClientBuilder("ingest.api-base-url", "https://pe-sub-api:9062/pe-sub-api").build())
                 .isNotNull();
     }
 

@@ -91,10 +91,10 @@ jasypt:
     password: ${JASYPT_ENCRYPTOR_PASSWORD:}
 
 app:
-  # Mutual TLS client cert for calls to pe-sub-api. Off on a workstation; the chart turns it on.
+  # Mutual TLS on server.port, and the client cert for calls to pe-sub-api. Off on a workstation;
+  # the chart turns it on.
   internal-tls:
     enabled: ${APP_INTERNAL_TLS_ENABLED:false}
-    port: ${APP_INTERNAL_TLS_PORT:8443}
     key-store: ${APP_INTERNAL_TLS_KEY_STORE:}
     key-store-password: ${APP_INTERNAL_TLS_KEY_STORE_PASSWORD:}
     trust-store: ${APP_INTERNAL_TLS_TRUST_STORE:}

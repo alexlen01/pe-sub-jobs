@@ -28,11 +28,11 @@ COPY --from=build /build/target/*.jar app.jar
 RUN mkdir -p /app/data && chown -R pesub:pesub /app
 USER pesub:pesub
 
-# The app listens on PORT (application.yml; the Helm chart sets it from containerPort). 8080 here
+# The app listens on PORT (application.yml; the Helm chart sets it from containerPort). 9064 here
 # only documents the image's expected default.
-EXPOSE 8080
+EXPOSE 9064
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD wget -qO- "http://localhost:${PORT:-8080}/pe-sub-jobs/actuator/health/readiness" | grep -q '"status":"UP"' || exit 1
+  CMD wget -q --no-check-certificate -O- "$([ "$APP_INTERNAL_TLS_ENABLED" = true ] && echo https || echo http)://localhost:${PORT:-9064}/pe-sub-jobs/actuator/health/readiness" | grep -q '"status":"UP"' || exit 1
 
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]

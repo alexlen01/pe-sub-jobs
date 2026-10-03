@@ -16,13 +16,12 @@ import java.util.Set;
 
 /**
  * Mutual TLS for service-to-service calls. One key store (this service's certificate) and one
- * trust store (the internal CA). pe-sub-jobs takes no service calls, so only its clients use them.
+ * trust store (the internal CA) serve both this service's own port and its outbound clients.
  * Passwords are expected as Jasypt ENC(...) values.
  */
 @ConfigurationProperties(prefix = "app.internal-tls")
 public record InternalTlsProperties(
         boolean enabled,
-        @DefaultValue("8443") int port,
         String keyStore,
         String keyStorePassword,
         @DefaultValue("PKCS12") String keyStoreType,
@@ -76,7 +75,7 @@ public record InternalTlsProperties(
     // Passwords stay out of logs and actuator output.
     @Override
     public String toString() {
-        return "InternalTlsProperties[enabled=" + enabled + ", port=" + port + ", keyStore=" + keyStore
+        return "InternalTlsProperties[enabled=" + enabled + ", keyStore=" + keyStore
                 + ", trustStore=" + trustStore + "]";
     }
 }

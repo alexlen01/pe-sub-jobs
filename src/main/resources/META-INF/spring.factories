@@ -1,0 +1,2 @@
+org.springframework.boot.EnvironmentPostProcessor=\
+com.ubs.pesubjobs.config.JasyptEnvironmentPostProcessor

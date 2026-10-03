@@ -12,14 +12,14 @@ management:
     health:
       probes:
         enabled: true
-      # Component breakdown (peSubApi reachability, ingestDirectories, diskSpace) alongside the
+      # Component breakdown (ingestDirectories, diskSpace; peSubApi on local only) alongside the
       # overall status — none of these details are credentials or PII, just operational signal.
       show-details: always
       group:
         liveness:
           include: livenessState
         readiness:
-          include: readinessState,peSubApi,ingestDirectories
+          include: readinessState,ingestDirectories
   info:
     java:
       enabled: true
@@ -83,6 +83,22 @@ azure:
     feed-prefix: ${AZURE_STORAGE_FEED_PREFIX:}
     bb-template-container: ${AZURE_STORAGE_BB_TEMPLATE_CONTAINER:pe-sub-bb-templates}
     bb-template-prefix: ${AZURE_STORAGE_BB_TEMPLATE_PREFIX:}
+
+
+# Jasypt master password for ENC(...) values; supplied by a Secret, never by a file in this repo.
+jasypt:
+  encryptor:
+    password: ${JASYPT_ENCRYPTOR_PASSWORD:}
+
+app:
+  # Mutual TLS client cert for calls to pe-sub-api. Off on a workstation; the chart turns it on.
+  internal-tls:
+    enabled: ${APP_INTERNAL_TLS_ENABLED:false}
+    port: ${APP_INTERNAL_TLS_PORT:8443}
+    key-store: ${APP_INTERNAL_TLS_KEY_STORE:}
+    key-store-password: ${APP_INTERNAL_TLS_KEY_STORE_PASSWORD:}
+    trust-store: ${APP_INTERNAL_TLS_TRUST_STORE:}
+    trust-store-password: ${APP_INTERNAL_TLS_TRUST_STORE_PASSWORD:}
 
 logging:
   file:

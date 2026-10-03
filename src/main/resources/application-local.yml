@@ -1,5 +1,11 @@
 server:
   port: 9064
+management:
+  endpoint:
+    health:
+      group:
+        readiness:
+          include: readinessState,peSubApi,ingestDirectories
 ingest:
   api-base-url: http://localhost:9062/pe-sub-api
 bb-template-import:

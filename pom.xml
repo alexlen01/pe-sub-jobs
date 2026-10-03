@@ -37,6 +37,13 @@
 
   <dependencies>
 
+    <!-- ENC(...) property decryption; Boot integration is in-house (JasyptEnvironmentPostProcessor). -->
+    <dependency>
+      <groupId>org.jasypt</groupId>
+      <artifactId>jasypt</artifactId>
+      <version>1.9.3</version>
+    </dependency>
+
     <!-- DB-less: no jdbc starter, no JDBC driver, no embedded test database. All writes go
          through pe-sub-api's REST endpoints; Spring Batch runs on ResourcelessJobRepository. -->
     <dependency>

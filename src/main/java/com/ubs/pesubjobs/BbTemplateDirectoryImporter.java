@@ -1,6 +1,7 @@
 package com.ubs.pesubjobs;
 
 import com.ubs.pesubjobs.config.BbTemplateImportProperties;
+import com.ubs.pesubjobs.config.InternalTlsProperties;
 import com.ubs.pesubjobs.security.JobsSecurityProperties;
 import com.ubs.pesubjobs.storage.BbTemplateObject;
 import com.ubs.pesubjobs.storage.BbTemplateStore;
@@ -42,8 +43,9 @@ public class BbTemplateDirectoryImporter implements ApplicationRunner {
     // Two constructors, so the injection point has to be named explicitly.
     @Autowired
     public BbTemplateDirectoryImporter(BbTemplateImportProperties props, BbTemplateStore store,
-                                       JobsSecurityProperties security) {
-        this(props, store, security, RestClient.builder());
+                                       JobsSecurityProperties security, InternalTlsProperties internalTls) {
+        this(props, store, security,
+                internalTls.restClientBuilder("bb-template-import.api-base-url", props.apiBaseUrl()));
     }
 
     /**

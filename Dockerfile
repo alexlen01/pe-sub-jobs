@@ -33,6 +33,6 @@ USER pesub:pesub
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD wget -qO- "http://localhost:${PORT:-8080}/pe-sub-jobs/actuator/health" | grep -q '"status":"UP"' || exit 1
+  CMD wget -qO- "http://localhost:${PORT:-8080}/pe-sub-jobs/actuator/health/readiness" | grep -q '"status":"UP"' || exit 1
 
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]

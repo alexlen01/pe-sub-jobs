@@ -1,6 +1,7 @@
 package com.ubs.pesubjobs.client;
 
 import com.ubs.pesubjobs.config.IngestProperties;
+import com.ubs.pesubjobs.config.InternalTlsProperties;
 import com.ubs.pesubjobs.model.LpFacilitySeedRow;
 import com.ubs.pesubjobs.model.ProcessedFacility;
 import com.ubs.pesubjobs.model.ProcessedLpMaster;
@@ -33,8 +34,9 @@ public class PeSubApiClient {
 
     private final RestClient rest;
 
-    public PeSubApiClient(IngestProperties props, JobsSecurityProperties security) {
-        this.rest = RestClient.builder()
+    public PeSubApiClient(IngestProperties props, JobsSecurityProperties security,
+                          InternalTlsProperties internalTls) {
+        this.rest = internalTls.restClientBuilder("ingest.api-base-url", props.apiBaseUrl())
                 .baseUrl(props.apiBaseUrl().replaceAll("/+$", ""))
                 // The ingest, seed and clear routes are SERVICE-gated on pe-sub-api. In gateway
                 // mode a header-less feed is rejected 401, so this service asserts its own
